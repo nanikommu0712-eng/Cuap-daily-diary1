@@ -1,0 +1,2792 @@
+import React, { useState, useEffect, useMemo } from 'react';
+import { initializeApp } from 'firebase/app';
+import {
+  getAuth,
+  signInAnonymously,
+  signInWithCustomToken,
+  onAuthStateChanged,
+  signOut
+} from 'firebase/auth';
+import {
+  getFirestore,
+  doc,
+  setDoc,
+  getDoc,
+  onSnapshot
+} from 'firebase/firestore';
+import {
+  BookOpen,
+  Calendar,
+  CheckCircle,
+  Clock,
+  Coffee,
+  Copy,
+  Edit3,
+  FileText,
+  Filter,
+  IndianRupee,
+  LogOut,
+  Moon,
+  Plus,
+  Share2,
+  ShieldAlert,
+  ShieldCheck,
+  Sun,
+  Trash2,
+  UserCheck,
+  UserX,
+  Lock,
+  Eye,
+  EyeOff,
+  User,
+  History,
+  AlertTriangle,
+  Shirt,
+  Sparkles,
+  ArrowRightLeft,
+  ChevronRight,
+  ExternalLink,
+  Search,
+  Check,
+  X,
+  Bell,
+  School,
+  Navigation,
+  ListTodo,
+  AlertCircle,
+  Send,
+  MapPin,
+  Utensils,
+  TrendingUp,
+  Tag,
+  CheckSquare
+} from 'lucide-react';
+
+// --- Firebase Setup & Safety Fallback ---
+let app, auth, db;
+let appId = 'cuap-cse-diary';
+
+try {
+  const firebaseConfig = typeof __firebase_config !== 'undefined'
+    ? JSON.parse(__firebase_config)
+    : {
+        apiKey: "demo-key",
+        authDomain: "demo.firebaseapp.com",
+        projectId: "demo-app",
+        storageBucket: "demo.appspot.com",
+        messagingSenderId: "123456789",
+        appId: "1:123456789:web:demo"
+      };
+  app = initializeApp(firebaseConfig);
+  auth = getAuth(app);
+  db = getFirestore(app);
+} catch (e) {
+  console.warn("Firebase fallback active", e);
+}
+
+// Subject options as mandated
+const SUBJECT_OPTIONS = [
+  '-- Select Subject --',
+  'Mathematics',
+  'Engineering Physics',
+  'Basic Electrical and Electronics Engineering (BEEE)',
+  'BEEE (Online)',
+  'BEEE Lab',
+  'EP Lab',
+  'Problem Solving in Programming C (PSPC)',
+  'PSPC Lab',
+  'Communicative English',
+  'Other (specify)'
+];
+
+const MEAL_STATUS_OPTIONS = [
+  'Taken in Hostel Mess',
+  'Skipped',
+  'Outside Food',
+  'Home/Fasting'
+];
+
+const EXPENSE_CATEGORIES = [
+  'Food & Snacks',
+  'Canteen',
+  'Stationery & Print',
+  'Travel',
+  'Personal & Hygiene',
+  'Books & Materials',
+  'Others'
+];
+
+const LAUNDRY_STATUSES = [
+  'Not Done',
+  'Sent to Laundry',
+  'Washed & Ironed',
+  'Collected'
+];
+
+export default function App() {
+  // --- Auth & User State ---
+  const [user, setUser] = useState(() => {
+    const saved = localStorage.getItem('cuap_active_session');
+    return saved ? JSON.parse(saved) : null;
+  });
+  const [authMode, setAuthMode] = useState('login'); // 'login' | 'register'
+  const [regNoInput, setRegNoInput] = useState('');
+  const [studentNameInput, setStudentNameInput] = useState('');
+  const [passwordInput, setPasswordInput] = useState('');
+  const [confirmPasswordInput, setConfirmPasswordInput] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
+  const [authError, setAuthError] = useState('');
+
+  // --- UI & Global State ---
+  const [darkMode, setDarkMode] = useState(() => {
+    return localStorage.getItem('cuap_theme') === 'dark';
+  });
+  const [activeTab, setActiveTab] = useState('dashboard');
+  const [dashboardScope, setDashboardScope] = useState('day'); // 'day', 'month', 'semester'
+  const [selectedDate, setSelectedDate] = useState(() => new Date().toISOString().split('T')[0]);
+  const [selectedMonth, setSelectedMonth] = useState(() => new Date().toISOString().slice(0, 7));
+  const [isShareModalOpen, setIsShareModalOpen] = useState(false);
+  const [deleteConfirmation, setDeleteConfirmation] = useState(null); // { type, id, title, action }
+  const [toastMessage, setToastMessage] = useState(null);
+
+  // --- Data States ---
+  // Shared across batchmates
+  const [sharedClasses, setSharedClasses] = useState([]);
+  // Private to student
+  const [personalAttendance, setPersonalAttendance] = useState({}); // { [classId]: 'present' | 'absent' }
+  const [assignmentsGiven, setAssignmentsGiven] = useState([]);
+  const [assignmentsSubmitted, setAssignmentsSubmitted] = useState([]);
+  const [messRecords, setMessRecords] = useState({}); // { [date]: { breakfast: {status, menu}, lunch, dinner } }
+  const [gatePasses, setGatePasses] = useState([]);
+  const [expenses, setExpenses] = useState([]);
+  const [dailyActivities, setDailyActivities] = useState({}); // { [date]: { laundry, specialOccasion, notes, todos: [], other } }
+
+  // --- Modal Form States ---
+  const [modalType, setModalType] = useState(null); // 'class' | 'asgn_given' | 'asgn_sub' | 'gatepass' | 'expense' | 'mark_submitted'
+  const [editingItem, setEditingItem] = useState(null);
+
+  // Quick form fields state
+  const [formData, setFormData] = useState({});
+
+  // Theme Sync
+  useEffect(() => {
+    if (darkMode) {
+      document.documentElement.classList.add('dark');
+      localStorage.setItem('cuap_theme', 'dark');
+    } else {
+      document.documentElement.classList.remove('dark');
+      localStorage.setItem('cuap_theme', 'light');
+    }
+  }, [darkMode]);
+
+  const showToast = (text) => {
+    setToastMessage(text);
+    setTimeout(() => setToastMessage(null), 3200);
+  };
+
+  // Auth initialization
+  useEffect(() => {
+    if (!auth) return;
+    const initAuth = async () => {
+      try {
+        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+          await signInWithCustomToken(auth, __initial_auth_token);
+        } else if (!user) {
+          await signInAnonymously(auth);
+        }
+      } catch (err) {
+        console.warn("Auth init error:", err);
+      }
+    };
+    initAuth();
+  }, []);
+
+  // --- Load & Sync Shared & Private Data ---
+  useEffect(() => {
+    // 1. Shared Classes (Shared across all students in batch)
+    const localSharedKey = 'cuap_shared_batch_classes';
+    const savedShared = localStorage.getItem(localSharedKey);
+    if (savedShared) {
+      try { setSharedClasses(JSON.parse(savedShared)); } catch(e) {}
+    }
+
+    if (db) {
+      try {
+        const sharedDocRef = doc(db, 'artifacts', appId, 'shared', 'classes');
+        onSnapshot(sharedDocRef, (snap) => {
+          if (snap.exists() && snap.data().list) {
+            setSharedClasses(snap.data().list);
+            localStorage.setItem(localSharedKey, JSON.stringify(snap.data().list));
+          }
+        }, err => console.warn("Firestore shared sub error", err));
+      } catch (e) {}
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!user) return;
+    // 2. Load Private Student Data
+    const localUserKey = `cuap_user_data_${user.regNo}`;
+    const savedUser = localStorage.getItem(localUserKey);
+    if (savedUser) {
+      try {
+        const parsed = JSON.parse(savedUser);
+        if (parsed.personalAttendance) setPersonalAttendance(parsed.personalAttendance);
+        if (parsed.assignmentsGiven) setAssignmentsGiven(parsed.assignmentsGiven);
+        if (parsed.assignmentsSubmitted) setAssignmentsSubmitted(parsed.assignmentsSubmitted);
+        if (parsed.messRecords) setMessRecords(parsed.messRecords);
+        if (parsed.gatePasses) setGatePasses(parsed.gatePasses);
+        if (parsed.expenses) setExpenses(parsed.expenses);
+        if (parsed.dailyActivities) setDailyActivities(parsed.dailyActivities);
+      } catch (e) {}
+    }
+
+    if (db && user.uid) {
+      try {
+        const userDocRef = doc(db, 'artifacts', appId, 'users', user.uid, 'private', 'diary');
+        onSnapshot(userDocRef, (snap) => {
+          if (snap.exists()) {
+            const d = snap.data();
+            if (d.personalAttendance) setPersonalAttendance(d.personalAttendance);
+            if (d.assignmentsGiven) setAssignmentsGiven(d.assignmentsGiven);
+            if (d.assignmentsSubmitted) setAssignmentsSubmitted(d.assignmentsSubmitted);
+            if (d.messRecords) setMessRecords(d.messRecords);
+            if (d.gatePasses) setGatePasses(d.gatePasses);
+            if (d.expenses) setExpenses(d.expenses);
+            if (d.dailyActivities) setDailyActivities(d.dailyActivities);
+          }
+        }, err => console.warn("Firestore user sub error", err));
+      } catch (e) {}
+    }
+  }, [user]);
+
+  // Sync Storage Helper
+  const syncSharedClasses = (newList) => {
+    setSharedClasses(newList);
+    localStorage.setItem('cuap_shared_batch_classes', JSON.stringify(newList));
+    if (db) {
+      try {
+        const sharedDocRef = doc(db, 'artifacts', appId, 'shared', 'classes');
+        setDoc(sharedDocRef, { list: newList }, { merge: true }).catch(() => {});
+      } catch (e) {}
+    }
+  };
+
+  const syncUserData = (updatedFields) => {
+    if (!user) return;
+    const currentData = {
+      personalAttendance: updatedFields.personalAttendance ?? personalAttendance,
+      assignmentsGiven: updatedFields.assignmentsGiven ?? assignmentsGiven,
+      assignmentsSubmitted: updatedFields.assignmentsSubmitted ?? assignmentsSubmitted,
+      messRecords: updatedFields.messRecords ?? messRecords,
+      gatePasses: updatedFields.gatePasses ?? gatePasses,
+      expenses: updatedFields.expenses ?? expenses,
+      dailyActivities: updatedFields.dailyActivities ?? dailyActivities
+    };
+
+    localStorage.setItem(`cuap_user_data_${user.regNo}`, JSON.stringify(currentData));
+
+    if (db && user.uid) {
+      try {
+        const userDocRef = doc(db, 'artifacts', appId, 'users', user.uid, 'private', 'diary');
+        setDoc(userDocRef, currentData, { merge: true }).catch(() => {});
+      } catch (e) {}
+    }
+  };
+
+  // --- Auth Actions ---
+  const handleRegister = (e) => {
+    e.preventDefault();
+    setAuthError('');
+    const cleanReg = regNoInput.trim().toUpperCase();
+
+    if (!cleanReg || !cleanReg.startsWith('CUAP')) {
+      setAuthError('Registration number must start with CUAP (e.g. CUAP26CSE001)');
+      return;
+    }
+    if (!passwordInput || passwordInput.length < 4) {
+      setAuthError('Password must be at least 4 characters long');
+      return;
+    }
+    if (passwordInput !== confirmPasswordInput) {
+      setAuthError('Passwords do not match!');
+      return;
+    }
+
+    const session = {
+      regNo: cleanReg,
+      name: studentNameInput.trim() || 'CSE Student',
+      uid: cleanReg
+    };
+
+    localStorage.setItem('cuap_active_session', JSON.stringify(session));
+    setUser(session);
+    showToast('Registration successful! Welcome to CUAP Daily Diary.');
+  };
+
+  const handleLogin = (e) => {
+    e.preventDefault();
+    setAuthError('');
+    const cleanReg = regNoInput.trim().toUpperCase();
+
+    if (!cleanReg) {
+      setAuthError('Please enter your Registration Number');
+      return;
+    }
+    if (!passwordInput) {
+      setAuthError('Please enter your password');
+      return;
+    }
+
+    const session = {
+      regNo: cleanReg,
+      name: studentNameInput.trim() || 'CSE Student',
+      uid: cleanReg
+    };
+
+    localStorage.setItem('cuap_active_session', JSON.stringify(session));
+    setUser(session);
+    showToast(`Welcome back, ${session.name}!`);
+  };
+
+  const handleLogout = () => {
+    localStorage.removeItem('cuap_active_session');
+    setUser(null);
+    if (auth) signOut(auth).catch(() => {});
+    showToast('Logged out of device.');
+  };
+
+  // --- Filter Data by Scope Helper ---
+  const filterByScope = (items, dateField = 'date') => {
+    return items.filter(item => {
+      const d = item[dateField];
+      if (!d) return false;
+      if (dashboardScope === 'day') {
+        return d === selectedDate;
+      } else if (dashboardScope === 'month') {
+        return d.startsWith(selectedMonth);
+      }
+      return true; // semester includes all
+    });
+  };
+
+  const scopedClasses = useMemo(() => filterByScope(sharedClasses), [sharedClasses, dashboardScope, selectedDate, selectedMonth]);
+  const scopedAssignmentsGiven = useMemo(() => filterByScope(assignmentsGiven, 'dateGiven'), [assignmentsGiven, dashboardScope, selectedDate, selectedMonth]);
+  const scopedAssignmentsSubmitted = useMemo(() => filterByScope(assignmentsSubmitted, 'submissionDate'), [assignmentsSubmitted, dashboardScope, selectedDate, selectedMonth]);
+  const scopedGatePasses = useMemo(() => filterByScope(gatePasses), [gatePasses, dashboardScope, selectedDate, selectedMonth]);
+  const scopedExpenses = useMemo(() => filterByScope(expenses), [expenses, dashboardScope, selectedDate, selectedMonth]);
+
+  // --- Attendance Calculation ---
+  const subjectAttendanceReport = useMemo(() => {
+    const reportMap = {};
+
+    scopedClasses.forEach(cls => {
+      const subjectName = cls.subject === 'Other (specify)' ? (cls.customSubject || 'Other') : cls.subject;
+      if (!subjectName || subjectName === '-- Select Subject --') return;
+
+      if (!reportMap[subjectName]) {
+        reportMap[subjectName] = { subject: subjectName, attended: 0, total: 0 };
+      }
+
+      const status = personalAttendance[cls.id];
+      if (status === 'present') {
+        reportMap[subjectName].attended += 1;
+        reportMap[subjectName].total += 1;
+      } else if (status === 'absent') {
+        reportMap[subjectName].total += 1;
+      }
+    });
+
+    return Object.values(reportMap).map(item => {
+      const percentage = item.total > 0 ? Math.round((item.attended / item.total) * 100) : 0;
+      const absent = item.total - item.attended;
+      let isSafe = percentage >= 75;
+      let needed = 0;
+
+      if (!isSafe) {
+        // Needed classes to reach 75%: (0.75 * total - attended) / 0.25
+        needed = Math.max(0, Math.ceil((0.75 * item.total - item.attended) / 0.25));
+      }
+
+      return {
+        ...item,
+        absent,
+        percentage,
+        status: isSafe ? 'Safe' : 'Shortage',
+        needed
+      };
+    });
+  }, [scopedClasses, personalAttendance]);
+
+  // Overall Attendance Metrics
+  const overallAttendanceMetric = useMemo(() => {
+    let attended = 0;
+    let total = 0;
+
+    scopedClasses.forEach(cls => {
+      const status = personalAttendance[cls.id];
+      if (status === 'present') {
+        attended++;
+        total++;
+      } else if (status === 'absent') {
+        total++;
+      }
+    });
+
+    const percentage = total > 0 ? Math.round((attended / total) * 100) : 100;
+    const isSafe = percentage >= 75;
+    const needed = !isSafe ? Math.max(0, Math.ceil((0.75 * total - attended) / 0.25)) : 0;
+
+    return { attended, total, absent: total - attended, percentage, isSafe, needed };
+  }, [scopedClasses, personalAttendance]);
+
+  // --- Unsubmitted / Pending Assignments Logic ---
+  const pendingAssignmentsList = useMemo(() => {
+    return assignmentsGiven.filter(given => {
+      const isSubmitted = assignmentsSubmitted.some(
+        sub => sub.subject === given.subject &&
+               (sub.topic || '').trim().toLowerCase() === (given.topic || '').trim().toLowerCase() &&
+               sub.assignmentGivenId === given.id
+      ) || given.status === 'submitted';
+      return !isSubmitted;
+    });
+  }, [assignmentsGiven, assignmentsSubmitted]);
+
+  // Expenses Total Calculator
+  const totalExpensesAmount = useMemo(() => {
+    return scopedExpenses.reduce((sum, item) => sum + (parseFloat(item.amount) || 0), 0);
+  }, [scopedExpenses]);
+
+  // Day specific activities record getter
+  const currentDayActivities = useMemo(() => {
+    return dailyActivities[selectedDate] || {
+      laundry: 'Not Done',
+      specialOccasion: '',
+      notes: '',
+      todos: [],
+      other: ''
+    };
+  }, [dailyActivities, selectedDate]);
+
+  // Day specific mess record getter
+  const currentDayMess = useMemo(() => {
+    return messRecords[selectedDate] || {
+      breakfast: { status: 'Taken in Hostel Mess', description: '' },
+      lunch: { status: 'Taken in Hostel Mess', description: '' },
+      dinner: { status: 'Taken in Hostel Mess', description: '' }
+    };
+  }, [messRecords, selectedDate]);
+
+  // --- Handlers & Actions ---
+
+  // 1. Attendance Toggle
+  const toggleAttendance = (classId, newStatus) => {
+    const updated = {
+      ...personalAttendance,
+      [classId]: personalAttendance[classId] === newStatus ? null : newStatus
+    };
+    setPersonalAttendance(updated);
+    syncUserData({ personalAttendance: updated });
+    showToast(`Marked ${newStatus ? newStatus.toUpperCase() : 'Unmarked'}`);
+  };
+
+  // 2. Class CRUD (Shared)
+  const handleSaveClass = (e) => {
+    e.preventDefault();
+    const id = editingItem?.id || 'cls_' + Date.now();
+    const subject = formData.subject || '-- Select Subject --';
+
+    if (subject === '-- Select Subject --') {
+      showToast('Please select a valid Subject!');
+      return;
+    }
+
+    const newClass = {
+      id,
+      date: formData.date || selectedDate,
+      subject,
+      customSubject: subject === 'Other (specify)' ? (formData.customSubject || '') : '',
+      startTime: formData.startTime || '09:00',
+      endTime: formData.endTime || '10:00',
+      room: formData.room || '',
+      topic: formData.topic || ''
+    };
+
+    const newList = editingItem?.id
+      ? sharedClasses.map(c => c.id === id ? newClass : c)
+      : [...sharedClasses, newClass];
+
+    syncSharedClasses(newList);
+    setModalType(null);
+    setEditingItem(null);
+    showToast('Class schedule updated for batch!');
+  };
+
+  const handleDeleteClass = (id, title) => {
+    setDeleteConfirmation({
+      title: `Delete Class: ${title}`,
+      action: () => {
+        const newList = sharedClasses.filter(c => c.id !== id);
+        syncSharedClasses(newList);
+        showToast('Class removed from schedule');
+      }
+    });
+  };
+
+  // 3. Assignments CRUD
+  const handleSaveAssignmentGiven = (e) => {
+    e.preventDefault();
+    const subject = formData.subject || '-- Select Subject --';
+    if (subject === '-- Select Subject --') {
+      showToast('Please select a valid subject!');
+      return;
+    }
+
+    const id = editingItem?.id || 'asgn_g_' + Date.now();
+    const newItem = {
+      id,
+      subject,
+      customSubject: subject === 'Other (specify)' ? (formData.customSubject || '') : '',
+      topic: formData.topic || '',
+      dateGiven: formData.dateGiven || selectedDate,
+      dueDate: formData.dueDate || selectedDate,
+      status: editingItem?.status || 'given'
+    };
+
+    const updated = editingItem?.id
+      ? assignmentsGiven.map(a => a.id === id ? newItem : a)
+      : [...assignmentsGiven, newItem];
+
+    setAssignmentsGiven(updated);
+    syncUserData({ assignmentsGiven: updated });
+    setModalType(null);
+    setEditingItem(null);
+    showToast('Assignment Given record saved!');
+  };
+
+  const handleSaveAssignmentSubmitted = (e) => {
+    e.preventDefault();
+    const subject = formData.subject || '-- Select Subject --';
+    if (subject === '-- Select Subject --') {
+      showToast('Please select a valid subject!');
+      return;
+    }
+
+    const id = editingItem?.id || 'asgn_s_' + Date.now();
+    const newItem = {
+      id,
+      assignmentGivenId: formData.assignmentGivenId || null,
+      subject,
+      customSubject: subject === 'Other (specify)' ? (formData.customSubject || '') : '',
+      topic: formData.topic || '',
+      submissionDate: formData.submissionDate || selectedDate,
+      remarks: formData.remarks || ''
+    };
+
+    const updatedSubmitted = editingItem?.id
+      ? assignmentsSubmitted.map(a => a.id === id ? newItem : a)
+      : [...assignmentsSubmitted, newItem];
+
+    let updatedGiven = assignmentsGiven;
+    if (formData.assignmentGivenId) {
+      updatedGiven = assignmentsGiven.map(g => g.id === formData.assignmentGivenId ? { ...g, status: 'submitted' } : g);
+    }
+
+    setAssignmentsSubmitted(updatedSubmitted);
+    setAssignmentsGiven(updatedGiven);
+    syncUserData({ assignmentsSubmitted: updatedSubmitted, assignmentsGiven: updatedGiven });
+    setModalType(null);
+    setEditingItem(null);
+    showToast('Assignment Submission recorded!');
+  };
+
+  const QuickMarkSubmitted = (givenItem) => {
+    setFormData({
+      assignmentGivenId: givenItem.id,
+      subject: givenItem.subject,
+      customSubject: givenItem.customSubject || '',
+      topic: givenItem.topic || '',
+      submissionDate: selectedDate,
+      remarks: 'Submitted on time'
+    });
+    setEditingItem(null);
+    setModalType('asgn_sub');
+  };
+
+  const handleDeleteAssignmentGiven = (id, title) => {
+    setDeleteConfirmation({
+      title: `Delete Assignment: ${title}`,
+      action: () => {
+        const updated = assignmentsGiven.filter(a => a.id !== id);
+        setAssignmentsGiven(updated);
+        syncUserData({ assignmentsGiven: updated });
+        showToast('Assignment Given deleted');
+      }
+    });
+  };
+
+  const handleDeleteAssignmentSubmitted = (id, title) => {
+    setDeleteConfirmation({
+      title: `Delete Submission: ${title}`,
+      action: () => {
+        const updated = assignmentsSubmitted.filter(a => a.id !== id);
+        setAssignmentsSubmitted(updated);
+        syncUserData({ assignmentsSubmitted: updated });
+        showToast('Submission record deleted');
+      }
+    });
+  };
+
+  // 4. Mess Tracker update
+  const handleUpdateMeal = (mealType, status, description) => {
+    const dayMess = currentDayMess;
+    const updatedDay = {
+      ...dayMess,
+      [mealType]: {
+        status: status !== undefined ? status : dayMess[mealType].status,
+        description: description !== undefined ? description : dayMess[mealType].description
+      }
+    };
+
+    const updatedAll = {
+      ...messRecords,
+      [selectedDate]: updatedDay
+    };
+
+    setMessRecords(updatedAll);
+    syncUserData({ messRecords: updatedAll });
+    showToast(`${mealType.toUpperCase()} updated!`);
+  };
+
+  // 5. Gate Pass CRUD
+  const handleSaveGatePass = (e) => {
+    e.preventDefault();
+    const id = editingItem?.id || 'gp_' + Date.now();
+    const newGp = {
+      id,
+      date: formData.date || selectedDate,
+      gateOut: formData.gateOut || '17:00',
+      gateIn: formData.gateIn || '19:30',
+      purpose: formData.purpose || 'Outing / Snack'
+    };
+
+    const updated = editingItem?.id
+      ? gatePasses.map(g => g.id === id ? newGp : g)
+      : [...gatePasses, newGp];
+
+    setGatePasses(updated);
+    syncUserData({ gatePasses: updated });
+    setModalType(null);
+    setEditingItem(null);
+    showToast('Gate Pass record saved!');
+  };
+
+  const handleDeleteGatePass = (id) => {
+    setDeleteConfirmation({
+      title: `Delete Gate Pass`,
+      action: () => {
+        const updated = gatePasses.filter(g => g.id !== id);
+        setGatePasses(updated);
+        syncUserData({ gatePasses: updated });
+        showToast('Gate pass deleted');
+      }
+    });
+  };
+
+  // 6. Expense CRUD
+  const handleSaveExpense = (e) => {
+    e.preventDefault();
+    const id = editingItem?.id || 'exp_' + Date.now();
+    const amountNum = parseFloat(formData.amount);
+
+    if (isNaN(amountNum) || amountNum <= 0) {
+      showToast('Please enter a valid amount');
+      return;
+    }
+
+    const newExp = {
+      id,
+      date: formData.date || selectedDate,
+      category: formData.category || 'Food & Snacks',
+      description: formData.description || '',
+      amount: amountNum
+    };
+
+    const updated = editingItem?.id
+      ? expenses.map(ex => ex.id === id ? newExp : ex)
+      : [...expenses, newExp];
+
+    setExpenses(updated);
+    syncUserData({ expenses: updated });
+    setModalType(null);
+    setEditingItem(null);
+    showToast('Expense recorded!');
+  };
+
+  const handleDeleteExpense = (id, title) => {
+    setDeleteConfirmation({
+      title: `Delete Expense: ${title}`,
+      action: () => {
+        const updated = expenses.filter(e => e.id !== id);
+        setExpenses(updated);
+        syncUserData({ expenses: updated });
+        showToast('Expense deleted');
+      }
+    });
+  };
+
+  // 7. Daily Activities Update Helpers
+  const updateActivitiesField = (field, val) => {
+    const updatedDay = {
+      ...currentDayActivities,
+      [field]: val
+    };
+
+    const updatedAll = {
+      ...dailyActivities,
+      [selectedDate]: updatedDay
+    };
+
+    setDailyActivities(updatedAll);
+    syncUserData({ dailyActivities: updatedAll });
+  };
+
+  // To-Do Logic (STRICT NO CHECKBOXES - Uses text status badges)
+  const handleAddTodo = (e) => {
+    e.preventDefault();
+    const text = (formData.newTodoText || '').trim();
+    if (!text) return;
+
+    const newTodo = {
+      id: 'td_' + Date.now(),
+      task: text,
+      status: 'Pending' // 'Pending' | 'In Progress' | 'Completed'
+    };
+
+    const currentTodos = currentDayActivities.todos || [];
+    updateActivitiesField('todos', [...currentTodos, newTodo]);
+    setFormData(prev => ({ ...prev, newTodoText: '' }));
+    showToast('To-Do task added!');
+  };
+
+  const handleCycleTodoStatus = (todoId) => {
+    const currentTodos = currentDayActivities.todos || [];
+    const updated = currentTodos.map(t => {
+      if (t.id === todoId) {
+        const nextStatus = t.status === 'Pending' ? 'In Progress' : t.status === 'In Progress' ? 'Completed' : 'Pending';
+        return { ...t, status: nextStatus };
+      }
+      return t;
+    });
+    updateActivitiesField('todos', updated);
+  };
+
+  const handleDeleteTodo = (todoId) => {
+    const currentTodos = currentDayActivities.todos || [];
+    const updated = currentTodos.filter(t => t.id !== todoId);
+    updateActivitiesField('todos', updated);
+    showToast('Task removed');
+  };
+
+  // --- Render Unauthenticated Login/Register Screen ---
+  if (!user) {
+    return (
+      <div className={`min-h-screen flex items-center justify-center p-4 transition-colors duration-200 ${darkMode ? 'bg-slate-900 text-slate-100' : 'bg-slate-50 text-slate-900'}`}>
+        <div className="max-w-md w-full space-y-6">
+          {/* Header Branding */}
+          <div className="text-center space-y-2">
+            <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-indigo-600 text-white shadow-lg shadow-indigo-500/30">
+              <School size={36} />
+            </div>
+            <h1 className="text-2xl font-bold tracking-tight">CUAP Daily Diary</h1>
+            <p className="text-sm text-slate-500 dark:text-slate-400">
+              B.Tech CSE Student Portal • Central University of Andhra Pradesh
+            </p>
+          </div>
+
+          {/* Card Container */}
+          <div className={`rounded-2xl p-6 md:p-8 shadow-xl border ${darkMode ? 'bg-slate-800 border-slate-700' : 'bg-white border-slate-200'}`}>
+            {/* Tabs Selector */}
+            <div className="grid grid-cols-2 p-1 mb-6 rounded-xl bg-slate-100 dark:bg-slate-900 text-sm font-medium">
+              <button
+                onClick={() => { setAuthMode('login'); setAuthError(''); }}
+                className={`py-2 rounded-lg transition-all ${authMode === 'login' ? 'bg-white dark:bg-slate-800 shadow text-indigo-600 dark:text-indigo-400' : 'text-slate-500 hover:text-slate-900 dark:hover:text-slate-200'}`}
+              >
+                Sign In
+              </button>
+              <button
+                onClick={() => { setAuthMode('register'); setAuthError(''); }}
+                className={`py-2 rounded-lg transition-all ${authMode === 'register' ? 'bg-white dark:bg-slate-800 shadow text-indigo-600 dark:text-indigo-400' : 'text-slate-500 hover:text-slate-900 dark:hover:text-slate-200'}`}
+              >
+                Register
+              </button>
+            </div>
+
+            {authError && (
+              <div className="mb-4 p-3 rounded-lg bg-rose-500/10 border border-rose-500/30 text-rose-600 dark:text-rose-400 text-sm flex items-center gap-2">
+                <AlertCircle size={18} className="shrink-0" />
+                <span>{authError}</span>
+              </div>
+            )}
+
+            {authMode === 'login' ? (
+              <form onSubmit={handleLogin} className="space-y-4">
+                <div>
+                  <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-1">
+                    Registration Number
+                  </label>
+                  <div className="relative">
+                    <User className="absolute left-3 top-3 text-slate-400" size={18} />
+                    <input
+                      type="text"
+                      required
+                      placeholder="e.g. CUAP26CSE001"
+                      value={regNoInput}
+                      onChange={(e) => setRegNoInput(e.target.value)}
+                      className={`w-full pl-10 pr-4 py-2.5 rounded-xl border focus:outline-none focus:ring-2 focus:ring-indigo-500 text-sm ${darkMode ? 'bg-slate-900 border-slate-700 text-white' : 'bg-slate-50 border-slate-300'}`}
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-1">
+                    Password
+                  </label>
+                  <div className="relative">
+                    <Lock className="absolute left-3 top-3 text-slate-400" size={18} />
+                    <input
+                      type={showPassword ? 'text' : 'password'}
+                      required
+                      placeholder="••••••••"
+                      value={passwordInput}
+                      onChange={(e) => setPasswordInput(e.target.value)}
+                      className={`w-full pl-10 pr-10 py-2.5 rounded-xl border focus:outline-none focus:ring-2 focus:ring-indigo-500 text-sm ${darkMode ? 'bg-slate-900 border-slate-700 text-white' : 'bg-slate-50 border-slate-300'}`}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowPassword(!showPassword)}
+                      className="absolute right-3 top-3 text-slate-400 hover:text-slate-600"
+                    >
+                      {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+                    </button>
+                  </div>
+                </div>
+
+                <button
+                  type="submit"
+                  className="w-full py-3 px-4 rounded-xl bg-indigo-600 hover:bg-indigo-700 active:scale-[0.99] text-white font-medium shadow-lg shadow-indigo-600/30 transition-all flex items-center justify-center gap-2"
+                >
+                  <span>Sign In to Student Portal</span>
+                  <ChevronRight size={18} />
+                </button>
+              </form>
+            ) : (
+              <form onSubmit={handleRegister} className="space-y-4">
+                <div>
+                  <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-1">
+                    Registration Number
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="CUAP26CSE001"
+                    value={regNoInput}
+                    onChange={(e) => setRegNoInput(e.target.value)}
+                    className={`w-full px-4 py-2.5 rounded-xl border focus:outline-none focus:ring-2 focus:ring-indigo-500 text-sm ${darkMode ? 'bg-slate-900 border-slate-700 text-white' : 'bg-slate-50 border-slate-300'}`}
+                  />
+                  <p className="text-[11px] text-slate-400 mt-1">Must start with CUAP (CSE Batch)</p>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-1">
+                    Student Full Name
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="e.g. Rahul Sharma"
+                    value={studentNameInput}
+                    onChange={(e) => setStudentNameInput(e.target.value)}
+                    className={`w-full px-4 py-2.5 rounded-xl border focus:outline-none focus:ring-2 focus:ring-indigo-500 text-sm ${darkMode ? 'bg-slate-900 border-slate-700 text-white' : 'bg-slate-50 border-slate-300'}`}
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-1">
+                    Password
+                  </label>
+                  <input
+                    type="password"
+                    required
+                    placeholder="At least 4 characters"
+                    value={passwordInput}
+                    onChange={(e) => setPasswordInput(e.target.value)}
+                    className={`w-full px-4 py-2.5 rounded-xl border focus:outline-none focus:ring-2 focus:ring-indigo-500 text-sm ${darkMode ? 'bg-slate-900 border-slate-700 text-white' : 'bg-slate-50 border-slate-300'}`}
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-1">
+                    Confirm Password
+                  </label>
+                  <input
+                    type="password"
+                    required
+                    placeholder="Re-enter password"
+                    value={confirmPasswordInput}
+                    onChange={(e) => setConfirmPasswordInput(e.target.value)}
+                    className={`w-full px-4 py-2.5 rounded-xl border focus:outline-none focus:ring-2 focus:ring-indigo-500 text-sm ${darkMode ? 'bg-slate-900 border-slate-700 text-white' : 'bg-slate-50 border-slate-300'}`}
+                  />
+                </div>
+
+                <button
+                  type="submit"
+                  className="w-full py-3 px-4 rounded-xl bg-indigo-600 hover:bg-indigo-700 active:scale-[0.99] text-white font-medium shadow-lg shadow-indigo-600/30 transition-all flex items-center justify-center gap-2"
+                >
+                  <span>Create Student Account</span>
+                  <ChevronRight size={18} />
+                </button>
+              </form>
+            )}
+          </div>
+
+          <div className="text-center text-xs text-slate-400">
+            Internal Portal for B.Tech Computer Science & Engineering • CUAP
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // --- Main Application UI ---
+  return (
+    <div className={`min-h-screen pb-20 md:pb-8 transition-colors duration-200 ${darkMode ? 'bg-slate-950 text-slate-100' : 'bg-slate-100 text-slate-900'}`}>
+      
+      {/* --- Top Sticky Navbar --- */}
+      <header className={`sticky top-0 z-30 backdrop-blur-md border-b shadow-sm ${darkMode ? 'bg-slate-900/90 border-slate-800' : 'bg-white/90 border-slate-200'}`}>
+        <div className="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between gap-3">
+          
+          {/* Logo & Brand */}
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-indigo-600 to-indigo-800 text-white flex items-center justify-center shadow-md">
+              <School size={22} />
+            </div>
+            <div>
+              <h1 className="font-bold text-base leading-tight tracking-tight flex items-center gap-2">
+                CUAP Daily Diary
+                <span className="text-[10px] uppercase tracking-wider font-semibold px-2 py-0.5 rounded-full bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 border border-indigo-500/20">
+                  CSE
+                </span>
+              </h1>
+              <p className="text-xs text-slate-500 dark:text-slate-400 hidden sm:block">
+                Central University of Andhra Pradesh
+              </p>
+            </div>
+          </div>
+
+          {/* Quick Date Indicator & Global Controls */}
+          <div className="flex items-center gap-2 sm:gap-3">
+            
+            {/* Share Portal Link Button */}
+            <button
+              onClick={() => setIsShareModalOpen(true)}
+              className="p-2 sm:px-3 sm:py-1.5 rounded-xl border text-xs font-medium flex items-center gap-1.5 hover:bg-indigo-50 dark:hover:bg-slate-800 text-indigo-600 dark:text-indigo-400 border-indigo-200 dark:border-slate-700 transition-colors"
+              title="Share Portal with Batchmates"
+            >
+              <Share2 size={16} />
+              <span className="hidden md:inline">Share</span>
+            </button>
+
+            {/* Dark Mode Toggle */}
+            <button
+              onClick={() => setDarkMode(!darkMode)}
+              className="p-2 rounded-xl border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+              title="Toggle Theme"
+            >
+              {darkMode ? <Sun size={18} className="text-amber-400" /> : <Moon size={18} />}
+            </button>
+
+            {/* User Profile Badge & Logout */}
+            <div className="pl-2 border-l border-slate-200 dark:border-slate-800 flex items-center gap-2">
+              <div className="hidden lg:block text-right">
+                <div className="text-xs font-bold leading-tight">{user.name}</div>
+                <div className="text-[10px] text-slate-400 font-mono">{user.regNo}</div>
+              </div>
+              <button
+                onClick={handleLogout}
+                className="p-2 rounded-xl bg-rose-500/10 hover:bg-rose-500/20 text-rose-600 dark:text-rose-400 transition-colors"
+                title={`Logout ${user.regNo}`}
+              >
+                <LogOut size={18} />
+              </button>
+            </div>
+
+          </div>
+        </div>
+      </header>
+
+      {/* --- Scope Selector Bar --- */}
+      <div className={`border-b ${darkMode ? 'bg-slate-900/60 border-slate-800' : 'bg-white border-slate-200'}`}>
+        <div className="max-w-7xl mx-auto px-4 py-2.5 flex flex-wrap items-center justify-between gap-3">
+          
+          {/* Scope Radio Group */}
+          <div className="flex items-center gap-1 p-1 rounded-xl bg-slate-100 dark:bg-slate-800 text-xs font-medium">
+            <button
+              onClick={() => setDashboardScope('day')}
+              className={`px-3 py-1.5 rounded-lg transition-all ${dashboardScope === 'day' ? 'bg-indigo-600 text-white shadow' : 'text-slate-600 dark:text-slate-300 hover:text-indigo-500'}`}
+            >
+              Selected Date (Day)
+            </button>
+            <button
+              onClick={() => setDashboardScope('month')}
+              className={`px-3 py-1.5 rounded-lg transition-all ${dashboardScope === 'month' ? 'bg-indigo-600 text-white shadow' : 'text-slate-600 dark:text-slate-300 hover:text-indigo-500'}`}
+            >
+              Selected Month
+            </button>
+            <button
+              onClick={() => setDashboardScope('semester')}
+              className={`px-3 py-1.5 rounded-lg transition-all ${dashboardScope === 'semester' ? 'bg-indigo-600 text-white shadow' : 'text-slate-600 dark:text-slate-300 hover:text-indigo-500'}`}
+            >
+              Overall Semester
+            </button>
+          </div>
+
+          {/* Active Date Selector Controls */}
+          <div className="flex items-center gap-2">
+            {dashboardScope === 'day' && (
+              <div className="flex items-center gap-2">
+                <Calendar size={16} className="text-indigo-500" />
+                <input
+                  type="date"
+                  value={selectedDate}
+                  onChange={(e) => setSelectedDate(e.target.value)}
+                  className={`px-3 py-1 rounded-lg border text-xs font-semibold focus:outline-none focus:ring-1 focus:ring-indigo-500 ${darkMode ? 'bg-slate-800 border-slate-700 text-white' : 'bg-slate-50 border-slate-300 text-slate-800'}`}
+                />
+              </div>
+            )}
+
+            {dashboardScope === 'month' && (
+              <div className="flex items-center gap-2">
+                <Calendar size={16} className="text-indigo-500" />
+                <input
+                  type="month"
+                  value={selectedMonth}
+                  onChange={(e) => setSelectedMonth(e.target.value)}
+                  className={`px-3 py-1 rounded-lg border text-xs font-semibold focus:outline-none focus:ring-1 focus:ring-indigo-500 ${darkMode ? 'bg-slate-800 border-slate-700 text-white' : 'bg-slate-50 border-slate-300 text-slate-800'}`}
+                />
+              </div>
+            )}
+          </div>
+
+        </div>
+      </div>
+
+      {/* --- Main Navigation Tabs --- */}
+      <div className="max-w-7xl mx-auto px-4 mt-4">
+        <div className="flex items-center gap-1 overflow-x-auto no-scrollbar pb-2 border-b border-slate-200 dark:border-slate-800 text-sm">
+          {[
+            { id: 'dashboard', label: 'Dashboard', icon: School },
+            { id: 'classes', label: 'Schedule & Attendance', icon: Clock },
+            { id: 'assignments', label: 'Assignments', icon: FileText, badge: pendingAssignmentsList.length },
+            { id: 'mess', label: 'Mess Tracker', icon: Utensils },
+            { id: 'gatepass', label: 'Gate In/Out', icon: Navigation },
+            { id: 'expenses', label: 'Daily Expenses', icon: IndianRupee },
+            { id: 'activities', label: 'Daily Activities', icon: ListTodo },
+            { id: 'history', label: 'Diary History', icon: History }
+          ].map((tab) => {
+            const IconComponent = tab.icon;
+            const isActive = activeTab === tab.id;
+            return (
+              <button
+                key={tab.id}
+                onClick={() => setActiveTab(tab.id)}
+                className={`flex items-center gap-2 px-4 py-2.5 rounded-xl font-medium whitespace-nowrap transition-all ${
+                  isActive
+                    ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-600/20'
+                    : 'text-slate-600 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-800'
+                }`}
+              >
+                <IconComponent size={18} />
+                <span>{tab.label}</span>
+                {tab.badge !== undefined && tab.badge > 0 && (
+                  <span className={`px-2 py-0.5 text-xs rounded-full font-bold ${isActive ? 'bg-white text-indigo-600' : 'bg-amber-500 text-white'}`}>
+                    {tab.badge}
+                  </span>
+                )}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* --- Main Content Body --- */}
+      <main className="max-w-7xl mx-auto px-4 py-6">
+
+        {/* =========================================================================
+            TAB 1: SEGMENTED DASHBOARD
+            ========================================================================= */}
+        {activeTab === 'dashboard' && (
+          <div className="space-y-6">
+            
+            {/* Top Scope Notice & Quick Info */}
+            <div className={`p-4 rounded-2xl border flex flex-wrap items-center justify-between gap-4 ${darkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-200'}`}>
+              <div>
+                <h2 className="font-bold text-lg">
+                  Dashboard Scope: <span className="text-indigo-600 dark:text-indigo-400 capitalize">{dashboardScope} View</span>
+                </h2>
+                <p className="text-xs text-slate-500 dark:text-slate-400">
+                  {dashboardScope === 'day' && `Showing activities & metrics for ${selectedDate}`}
+                  {dashboardScope === 'month' && `Showing aggregated summary for ${selectedMonth}`}
+                  {dashboardScope === 'semester' && `Showing complete semester overview`}
+                </p>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => {
+                    setFormData({ date: selectedDate, startTime: '09:00', endTime: '10:00', subject: '-- Select Subject --' });
+                    setEditingItem(null);
+                    setModalType('class');
+                  }}
+                  className="px-3.5 py-2 rounded-xl bg-indigo-600 text-white text-xs font-semibold shadow hover:bg-indigo-700 flex items-center gap-1.5"
+                >
+                  <Plus size={16} />
+                  <span>Add Class</span>
+                </button>
+                <button
+                  onClick={() => {
+                    setFormData({ category: 'Food & Snacks', date: selectedDate });
+                    setEditingItem(null);
+                    setModalType('expense');
+                  }}
+                  className="px-3.5 py-2 rounded-xl bg-emerald-600 text-white text-xs font-semibold shadow hover:bg-emerald-700 flex items-center gap-1.5"
+                >
+                  <Plus size={16} />
+                  <span>Add Expense</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Metrics Grid */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+              
+              {/* Metric 1: Attendance */}
+              <div className={`p-5 rounded-2xl border shadow-sm ${darkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-200'}`}>
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-semibold uppercase tracking-wider text-slate-400">Attendance</span>
+                  <div className={`p-2 rounded-xl ${overallAttendanceMetric.isSafe ? 'bg-emerald-500/10 text-emerald-500' : 'bg-rose-500/10 text-rose-500'}`}>
+                    {overallAttendanceMetric.isSafe ? <ShieldCheck size={20} /> : <ShieldAlert size={20} />}
+                  </div>
+                </div>
+                <div className="mt-3 flex items-baseline justify-between">
+                  <div className="text-3xl font-extrabold">{overallAttendanceMetric.percentage}%</div>
+                  <span className={`text-xs font-bold px-2 py-0.5 rounded-md ${overallAttendanceMetric.isSafe ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400' : 'bg-rose-500/10 text-rose-600 dark:text-rose-400'}`}>
+                    {overallAttendanceMetric.isSafe ? 'Safe (≥75%)' : 'Shortage (<75%)'}
+                  </span>
+                </div>
+                <p className="text-xs text-slate-500 mt-2">
+                  Attended {overallAttendanceMetric.attended} of {overallAttendanceMetric.total} classes
+                </p>
+                {!overallAttendanceMetric.isSafe && overallAttendanceMetric.needed > 0 && (
+                  <p className="text-xs font-semibold text-rose-500 mt-1">
+                    ⚠️ Need to attend next {overallAttendanceMetric.needed} classes to hit 75%
+                  </p>
+                )}
+              </div>
+
+              {/* Metric 2: Pending Assignments */}
+              <div className={`p-5 rounded-2xl border shadow-sm ${darkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-200'}`}>
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-semibold uppercase tracking-wider text-slate-400">Pending Assignments</span>
+                  <div className="p-2 rounded-xl bg-amber-500/10 text-amber-500">
+                    <FileText size={20} />
+                  </div>
+                </div>
+                <div className="mt-3 text-3xl font-extrabold text-amber-600 dark:text-amber-400">
+                  {pendingAssignmentsList.length}
+                </div>
+                <p className="text-xs text-slate-500 mt-2">
+                  Unsubmitted homework / lab tasks
+                </p>
+              </div>
+
+              {/* Metric 3: Total Expenses */}
+              <div className={`p-5 rounded-2xl border shadow-sm ${darkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-200'}`}>
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-semibold uppercase tracking-wider text-slate-400">Total Spent</span>
+                  <div className="p-2 rounded-xl bg-indigo-500/10 text-indigo-500">
+                    <IndianRupee size={20} />
+                  </div>
+                </div>
+                <div className="mt-3 text-3xl font-extrabold text-indigo-600 dark:text-indigo-400">
+                  ₹{totalExpensesAmount.toLocaleString('en-IN')}
+                </div>
+                <p className="text-xs text-slate-500 mt-2">
+                  Expenses in chosen scope
+                </p>
+              </div>
+
+              {/* Metric 4: Gate Outings */}
+              <div className={`p-5 rounded-2xl border shadow-sm ${darkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-200'}`}>
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-semibold uppercase tracking-wider text-slate-400">Gate Passes</span>
+                  <div className="p-2 rounded-xl bg-purple-500/10 text-purple-500">
+                    <Navigation size={20} />
+                  </div>
+                </div>
+                <div className="mt-3 text-3xl font-extrabold text-purple-600 dark:text-purple-400">
+                  {scopedGatePasses.length}
+                </div>
+                <p className="text-xs text-slate-500 mt-2">
+                  Outings logged
+                </p>
+              </div>
+
+            </div>
+
+            {/* Subject Attendance Detailed Threshold Report Table */}
+            <div className={`p-6 rounded-2xl border shadow-sm ${darkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-200'}`}>
+              <h3 className="font-bold text-base mb-4 flex items-center justify-between">
+                <span className="flex items-center gap-2">
+                  <BookOpen size={18} className="text-indigo-500" />
+                  Subject-Wise Attendance Threshold Report (75% Rule)
+                </span>
+                <span className="text-xs text-slate-400 font-normal">Scope: {dashboardScope}</span>
+              </h3>
+
+              {subjectAttendanceReport.length === 0 ? (
+                <div className="text-center py-8 text-slate-400 text-sm">
+                  No subject classes recorded for this scope. Add classes in the Schedule tab.
+                </div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left text-xs sm:text-sm">
+                    <thead>
+                      <tr className={`border-b ${darkMode ? 'border-slate-800 text-slate-400' : 'border-slate-200 text-slate-500'}`}>
+                        <th className="pb-3 font-semibold">Subject Name</th>
+                        <th className="pb-3 font-semibold">Attended / Total</th>
+                        <th className="pb-3 font-semibold">Percentage</th>
+                        <th className="pb-3 font-semibold">75% Status</th>
+                        <th className="pb-3 font-semibold">Classes Needed</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100 dark:divide-slate-800/60">
+                      {subjectAttendanceReport.map((rep, idx) => (
+                        <tr key={idx} className="hover:bg-slate-50/50 dark:hover:bg-slate-800/40">
+                          <td className="py-3 font-medium">{rep.subject}</td>
+                          <td className="py-3">{rep.attended} / {rep.total}</td>
+                          <td className="py-3 font-bold">
+                            <span className={rep.percentage >= 75 ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400'}>
+                              {rep.percentage}%
+                            </span>
+                          </td>
+                          <td className="py-3">
+                            <span className={`px-2.5 py-1 rounded-full text-[11px] font-bold ${
+                              rep.status === 'Safe'
+                                ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20'
+                                : 'bg-rose-500/10 text-rose-600 dark:text-rose-400 border border-rose-500/20'
+                            }`}>
+                              {rep.status === 'Safe' ? '✓ SAFE' : '⚠️ SHORTAGE'}
+                            </span>
+                          </td>
+                          <td className="py-3">
+                            {rep.status === 'Safe' ? (
+                              <span className="text-slate-400">On Track</span>
+                            ) : (
+                              <span className="text-rose-500 font-bold">Need {rep.needed} consecutive</span>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+
+            {/* Split Grid for Quick Overview */}
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              
+              {/* Left: Pending Assignments List */}
+              <div className={`p-6 rounded-2xl border shadow-sm ${darkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-200'}`}>
+                <div className="flex items-center justify-between mb-4">
+                  <h3 className="font-bold text-base flex items-center gap-2">
+                    <FileText size={18} className="text-amber-500" />
+                    Pending Homework / Assignments
+                  </h3>
+                  <button
+                    onClick={() => setActiveTab('assignments')}
+                    className="text-xs font-semibold text-indigo-600 dark:text-indigo-400 hover:underline"
+                  >
+                    View All
+                  </button>
+                </div>
+
+                {pendingAssignmentsList.length === 0 ? (
+                  <div className="text-center py-6 text-slate-400 text-sm">
+                    🎉 All clear! No pending assignments in this queue.
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    {pendingAssignmentsList.slice(0, 4).map(item => (
+                      <div key={item.id} className={`p-3.5 rounded-xl border flex items-center justify-between gap-3 ${darkMode ? 'bg-slate-800/60 border-slate-700' : 'bg-slate-50 border-slate-200'}`}>
+                        <div>
+                          <div className="font-semibold text-sm">
+                            {item.subject === 'Other (specify)' ? item.customSubject : item.subject}
+                          </div>
+                          {item.topic && <div className="text-xs text-slate-500">{item.topic}</div>}
+                          <div className="text-[11px] text-rose-500 mt-1 font-medium">
+                            Due: {item.dueDate}
+                          </div>
+                        </div>
+
+                        <button
+                          onClick={() => QuickMarkSubmitted(item)}
+                          className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-medium shrink-0 flex items-center gap-1 shadow"
+                        >
+                          <Check size={14} />
+                          <span>Mark Submitted</span>
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* Right: Today's Food Mess Summary */}
+              <div className={`p-6 rounded-2xl border shadow-sm ${darkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-200'}`}>
+                <div className="flex items-center justify-between mb-4">
+                  <h3 className="font-bold text-base flex items-center gap-2">
+                    <Utensils size={18} className="text-emerald-500" />
+                    Mess Food Record ({selectedDate})
+                  </h3>
+                  <button
+                    onClick={() => setActiveTab('mess')}
+                    className="text-xs font-semibold text-indigo-600 dark:text-indigo-400 hover:underline"
+                  >
+                    Manage Mess
+                  </button>
+                </div>
+
+                <div className="space-y-3">
+                  {['breakfast', 'lunch', 'dinner'].map((meal) => {
+                    const rec = currentDayMess[meal] || { status: 'Taken in Hostel Mess', description: '' };
+                    return (
+                      <div key={meal} className={`p-3 rounded-xl border flex items-center justify-between ${darkMode ? 'bg-slate-800/60 border-slate-700' : 'bg-slate-50 border-slate-200'}`}>
+                        <div>
+                          <span className="text-xs font-bold uppercase tracking-wider text-slate-400 block">
+                            {meal}
+                          </span>
+                          <span className="text-sm font-semibold capitalize">{rec.status}</span>
+                          {rec.description && (
+                            <p className="text-xs text-slate-500 italic mt-0.5">{rec.description}</p>
+                          )}
+                        </div>
+                        <span className="px-2.5 py-1 rounded-lg text-xs font-semibold bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 border border-indigo-500/20">
+                          {rec.status}
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+            </div>
+
+          </div>
+        )}
+
+        {/* =========================================================================
+            TAB 2: SHARED CLASS SCHEDULE & PERSONAL ATTENDANCE
+            ========================================================================= */}
+        {activeTab === 'classes' && (
+          <div className="space-y-6">
+            
+            {/* Header Banner */}
+            <div className={`p-5 rounded-2xl border flex flex-wrap items-center justify-between gap-4 ${darkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-200'}`}>
+              <div>
+                <h2 className="font-bold text-lg flex items-center gap-2">
+                  <Clock className="text-indigo-500" size={20} />
+                  Shared CSE Batch Class Schedule & Attendance
+                </h2>
+                <p className="text-xs text-slate-500 dark:text-slate-400">
+                  Classes added here are shared across all registered CSE batchmates. Attendance markings are strictly private to you.
+                </p>
+              </div>
+
+              <button
+                onClick={() => {
+                  setFormData({ date: selectedDate, startTime: '09:00', endTime: '10:00', subject: '-- Select Subject --' });
+                  setEditingItem(null);
+                  setModalType('class');
+                }}
+                className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold shadow-lg shadow-indigo-600/30 flex items-center gap-2"
+              >
+                <Plus size={16} />
+                <span>Add Class to Batch Schedule</span>
+              </button>
+            </div>
+
+            {/* List of Classes for Selected Date */}
+            <div className="space-y-4">
+              <div className="flex items-center justify-between">
+                <h3 className="font-bold text-sm text-slate-500 uppercase tracking-wider">
+                  Scheduled Classes ({scopedClasses.length})
+                </h3>
+              </div>
+
+              {scopedClasses.length === 0 ? (
+                <div className={`p-12 text-center rounded-2xl border ${darkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-200'}`}>
+                  <Calendar size={40} className="mx-auto text-slate-400 mb-3 opacity-60" />
+                  <p className="font-semibold text-slate-600 dark:text-slate-300">No classes scheduled for this view</p>
+                  <p className="text-xs text-slate-400 mt-1">Click "Add Class to Batch Schedule" to add a new lecture or lab session.</p>
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {scopedClasses.map((cls) => {
+                    const userStatus = personalAttendance[cls.id];
+                    const subjectDisplayName = cls.subject === 'Other (specify)' ? cls.customSubject : cls.subject;
+
+                    return (
+                      <div
+                        key={cls.id}
+                        className={`p-5 rounded-2xl border shadow-sm transition-all relative ${
+                          userStatus === 'present'
+                            ? (darkMode ? 'bg-emerald-950/20 border-emerald-800/50' : 'bg-emerald-50/70 border-emerald-200')
+                            : userStatus === 'absent'
+                            ? (darkMode ? 'bg-rose-950/20 border-rose-800/50' : 'bg-rose-50/70 border-rose-200')
+                            : (darkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-200')
+                        }`}
+                      >
+                        {/* Class Header */}
+                        <div className="flex items-start justify-between gap-2 mb-3">
+                          <div>
+                            <span className="text-[11px] font-bold px-2 py-0.5 rounded bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 border border-indigo-500/20">
+                              {cls.startTime} - {cls.endTime}
+                            </span>
+                            <h4 className="font-bold text-base mt-1.5">{subjectDisplayName}</h4>
+                            {cls.topic && <p className="text-xs text-slate-500 dark:text-slate-400">{cls.topic}</p>}
+                            {cls.room && (
+                              <div className="text-xs text-slate-400 flex items-center gap-1 mt-1">
+                                <MapPin size={12} />
+                                <span>{cls.room}</span>
+                              </div>
+                            )}
+                          </div>
+
+                          {/* Edit / Delete Buttons */}
+                          <div className="flex items-center gap-1">
+                            <button
+                              onClick={() => {
+                                setEditingItem(cls);
+                                setFormData(cls);
+                                setModalType('class');
+                              }}
+                              className="p-1.5 rounded-lg hover:bg-slate-200 dark:hover:bg-slate-800 text-slate-500"
+                              title="Edit Class"
+                            >
+                              <Edit3 size={15} />
+                            </button>
+                            <button
+                              onClick={() => handleDeleteClass(cls.id, subjectDisplayName)}
+                              className="p-1.5 rounded-lg hover:bg-rose-500/20 text-rose-500"
+                              title="Delete Class"
+                            >
+                              <Trash2 size={15} />
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* Personal Attendance Toggle Bar */}
+                        <div className="mt-4 pt-3 border-t border-slate-200/60 dark:border-slate-800 flex items-center justify-between">
+                          <span className="text-xs font-semibold text-slate-500">Your Attendance:</span>
+                          
+                          <div className="flex items-center gap-2">
+                            <button
+                              onClick={() => toggleAttendance(cls.id, 'present')}
+                              className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1 ${
+                                userStatus === 'present'
+                                  ? 'bg-emerald-600 text-white shadow-md shadow-emerald-600/30'
+                                  : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:bg-emerald-500/10 hover:text-emerald-500'
+                              }`}
+                            >
+                              <CheckCircle size={14} />
+                              <span>Present</span>
+                            </button>
+
+                            <button
+                              onClick={() => toggleAttendance(cls.id, 'absent')}
+                              className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1 ${
+                                userStatus === 'absent'
+                                  ? 'bg-rose-600 text-white shadow-md shadow-rose-600/30'
+                                  : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:bg-rose-500/10 hover:text-rose-500'
+                              }`}
+                            >
+                              <UserX size={14} />
+                              <span>Absent</span>
+                            </button>
+                          </div>
+                        </div>
+
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+
+          </div>
+        )}
+
+        {/* =========================================================================
+            TAB 3: ASSIGNMENTS (STRICT NO CHECKBOXES)
+            ========================================================================= */}
+        {activeTab === 'assignments' && (
+          <div className="space-y-6">
+            
+            {/* Action Bar */}
+            <div className={`p-5 rounded-2xl border flex flex-wrap items-center justify-between gap-4 ${darkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-200'}`}>
+              <div>
+                <h2 className="font-bold text-lg flex items-center gap-2">
+                  <FileText className="text-amber-500" size={20} />
+                  Assignments Tracker (Independent Records)
+                </h2>
+                <p className="text-xs text-slate-500 dark:text-slate-400">
+                  Track assignments given by faculty and log your completed submissions separately.
+                </p>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => {
+                    setFormData({ subject: '-- Select Subject --', dateGiven: selectedDate, dueDate: selectedDate });
+                    setEditingItem(null);
+                    setModalType('asgn_given');
+                  }}
+                  className="px-3.5 py-2 rounded-xl bg-amber-600 hover:bg-amber-700 text-white text-xs font-semibold shadow flex items-center gap-1.5"
+                >
+                  <Plus size={16} />
+                  <span>Log Assignment Given</span>
+                </button>
+
+                <button
+                  onClick={() => {
+                    setFormData({ subject: '-- Select Subject --', submissionDate: selectedDate });
+                    setEditingItem(null);
+                    setModalType('asgn_sub');
+                  }}
+                  className="px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold shadow flex items-center gap-1.5"
+                >
+                  <Plus size={16} />
+                  <span>Log Submission</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Split Grid for Given vs Submitted */}
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              
+              {/* SECTION A: ASSIGNMENTS GIVEN */}
+              <div className="space-y-4">
+                <h3 className="font-bold text-sm uppercase tracking-wider text-slate-500 flex items-center justify-between">
+                  <span>Assignments Given ({scopedAssignmentsGiven.length})</span>
+                </h3>
+
+                {scopedAssignmentsGiven.length === 0 ? (
+                  <div className={`p-8 text-center rounded-2xl border ${darkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-200'}`}>
+                    <p className="text-sm text-slate-400">No assignment given records found.</p>
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    {scopedAssignmentsGiven.map((item) => {
+                      const subjectTitle = item.subject === 'Other (specify)' ? item.customSubject : item.subject;
+                      const isPending = pendingAssignmentsList.some(p => p.id === item.id);
+
+                      return (
+                        <div key={item.id} className={`p-4 rounded-2xl border shadow-sm ${darkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-200'}`}>
+                          <div className="flex items-start justify-between gap-2">
+                            <div>
+                              <div className="flex items-center gap-2">
+                                <span className="font-bold text-base">{subjectTitle}</span>
+                                <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                                  isPending ? 'bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20' : 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20'
+                                }`}>
+                                  {isPending ? 'Pending' : 'Completed'}
+                                </span>
+                              </div>
+                              {item.topic && <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">{item.topic}</p>}
+                              
+                              <div className="flex items-center gap-4 text-xs text-slate-400 mt-2">
+                                <span>Given: {item.dateGiven}</span>
+                                <span className="text-rose-500 font-medium">Due: {item.dueDate}</span>
+                              </div>
+                            </div>
+
+                            <div className="flex items-center gap-1">
+                              <button
+                                onClick={() => {
+                                  setEditingItem(item);
+                                  setFormData(item);
+                                  setModalType('asgn_given');
+                                }}
+                                className="p-1.5 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-400"
+                              >
+                                <Edit3 size={15} />
+                              </button>
+                              <button
+                                onClick={() => handleDeleteAssignmentGiven(item.id, subjectTitle)}
+                                className="p-1.5 rounded-lg hover:bg-rose-500/20 text-rose-500"
+                              >
+                                <Trash2 size={15} />
+                              </button>
+                            </div>
+                          </div>
+
+                          {isPending && (
+                            <div className="mt-3 pt-3 border-t border-slate-100 dark:border-slate-800 flex justify-end">
+                              <button
+                                onClick={() => QuickMarkSubmitted(item)}
+                                className="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold shadow flex items-center gap-1"
+                              >
+                                <Check size={14} />
+                                <span>Quick Mark Submitted</span>
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+
+              {/* SECTION B: ASSIGNMENTS SUBMITTED */}
+              <div className="space-y-4">
+                <h3 className="font-bold text-sm uppercase tracking-wider text-slate-500">
+                  Submissions Logged ({scopedAssignmentsSubmitted.length})
+                </h3>
+
+                {scopedAssignmentsSubmitted.length === 0 ? (
+                  <div className={`p-8 text-center rounded-2xl border ${darkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-200'}`}>
+                    <p className="text-sm text-slate-400">No submissions recorded yet.</p>
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    {scopedAssignmentsSubmitted.map((item) => {
+                      const subjectTitle = item.subject === 'Other (specify)' ? item.customSubject : item.subject;
+
+                      return (
+                        <div key={item.id} className={`p-4 rounded-2xl border shadow-sm ${darkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-200'}`}>
+                          <div className="flex items-start justify-between gap-2">
+                            <div>
+                              <div className="flex items-center gap-2">
+                                <span className="font-bold text-base">{subjectTitle}</span>
+                                <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
+                                  Submitted
+                                </span>
+                              </div>
+                              {item.topic && <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">{item.topic}</p>}
+                              
+                              <div className="text-xs text-slate-400 mt-2">
+                                Submitted on: <span className="font-medium text-slate-600 dark:text-slate-300">{item.submissionDate}</span>
+                              </div>
+                              {item.remarks && (
+                                <p className="text-xs text-slate-500 italic mt-1 bg-slate-50 dark:bg-slate-800/60 p-2 rounded-lg">
+                                  "{item.remarks}"
+                                </p>
+                              )}
+                            </div>
+
+                            <div className="flex items-center gap-1">
+                              <button
+                                onClick={() => {
+                                  setEditingItem(item);
+                                  setFormData(item);
+                                  setModalType('asgn_sub');
+                                }}
+                                className="p-1.5 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-400"
+                              >
+                                <Edit3 size={15} />
+                              </button>
+                              <button
+                                onClick={() => handleDeleteAssignmentSubmitted(item.id, subjectTitle)}
+                                className="p-1.5 rounded-lg hover:bg-rose-500/20 text-rose-500"
+                              >
+                                <Trash2 size={15} />
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+
+            </div>
+
+          </div>
+        )}
+
+        {/* =========================================================================
+            TAB 4: MESS / FOOD RECORD TRACKER (NO RATINGS)
+            ========================================================================= */}
+        {activeTab === 'mess' && (
+          <div className="space-y-6">
+            
+            {/* Header Banner */}
+            <div className={`p-5 rounded-2xl border flex flex-wrap items-center justify-between gap-4 ${darkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-200'}`}>
+              <div>
+                <h2 className="font-bold text-lg flex items-center gap-2">
+                  <Utensils className="text-emerald-500" size={20} />
+                  Hostel Mess & Meal Tracker ({selectedDate})
+                </h2>
+                <p className="text-xs text-slate-500 dark:text-slate-400">
+                  Record meal status and menu notes for Breakfast, Lunch, and Dinner. No star ratings.
+                </p>
+              </div>
+            </div>
+
+            {/* 3 Meals Cards Grid */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+              {['breakfast', 'lunch', 'dinner'].map((meal) => {
+                const record = currentDayMess[meal] || { status: 'Taken in Hostel Mess', description: '' };
+
+                return (
+                  <div key={meal} className={`p-5 rounded-2xl border shadow-sm space-y-4 ${darkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-200'}`}>
+                    <div className="flex items-center justify-between border-b pb-3 border-slate-100 dark:border-slate-800">
+                      <h3 className="font-bold text-base capitalize flex items-center gap-2">
+                        <Coffee size={18} className="text-amber-500" />
+                        {meal}
+                      </h3>
+                      <span className="text-xs text-slate-400 font-semibold">{selectedDate}</span>
+                    </div>
+
+                    {/* Meal Status Radio Pills */}
+                    <div>
+                      <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-2">
+                        Meal Status
+                      </label>
+                      <div className="space-y-2">
+                        {MEAL_STATUS_OPTIONS.map((statusOpt) => (
+                          <button
+                            key={statusOpt}
+                            onClick={() => handleUpdateMeal(meal, statusOpt, record.description)}
+                            className={`w-full text-left px-3 py-2 rounded-xl text-xs font-medium transition-all border ${
+                              record.status === statusOpt
+                                ? 'bg-indigo-600 text-white border-indigo-600 shadow'
+                                : (darkMode ? 'bg-slate-800 border-slate-700 text-slate-300 hover:border-slate-600' : 'bg-slate-50 border-slate-200 text-slate-700 hover:border-slate-300')
+                            }`}
+                          >
+                            {statusOpt}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Menu Description / Remarks */}
+                    <div>
+                      <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-1">
+                        Food / Menu Description
+                      </label>
+                      <input
+                        type="text"
+                        placeholder="e.g. Idli Sambar, Paneer Butter Masala..."
+                        value={record.description || ''}
+                        onChange={(e) => handleUpdateMeal(meal, record.status, e.target.value)}
+                        className={`w-full px-3 py-2 rounded-xl border text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500 ${darkMode ? 'bg-slate-800 border-slate-700 text-white' : 'bg-slate-50 border-slate-300'}`}
+                      />
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+          </div>
+        )}
+
+        {/* =========================================================================
+            TAB 5: GATE IN AND GATE OUT
+            ========================================================================= */}
+        {activeTab === 'gatepass' && (
+          <div className="space-y-6">
+            
+            {/* Action Bar */}
+            <div className={`p-5 rounded-2xl border flex flex-wrap items-center justify-between gap-4 ${darkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-200'}`}>
+              <div>
+                <h2 className="font-bold text-lg flex items-center gap-2">
+                  <Navigation className="text-purple-500" size={20} />
+                  Hostel Gate Pass Register
+                </h2>
+                <p className="text-xs text-slate-500 dark:text-slate-400">
+                  Log campus gate-out and gate-in timing along with outing purpose.
+                </p>
+              </div>
+
+              <button
+                onClick={() => {
+                  setFormData({ date: selectedDate, gateOut: '17:00', gateIn: '19:30', purpose: '' });
+                  setEditingItem(null);
+                  setModalType('gatepass');
+                }}
+                className="px-4 py-2 rounded-xl bg-purple-600 hover:bg-purple-700 text-white text-xs font-semibold shadow flex items-center gap-2"
+              >
+                <Plus size={16} />
+                <span>Add Gate Outing</span>
+              </button>
+            </div>
+
+            {/* List of Outings */}
+            <div className="space-y-3">
+              {scopedGatePasses.length === 0 ? (
+                <div className={`p-12 text-center rounded-2xl border ${darkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-200'}`}>
+                  <Navigation size={36} className="mx-auto text-slate-400 mb-2 opacity-50" />
+                  <p className="font-semibold text-slate-600 dark:text-slate-300">No gate passes recorded for this scope</p>
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {scopedGatePasses.map((gp) => (
+                    <div key={gp.id} className={`p-5 rounded-2xl border shadow-sm ${darkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-200'}`}>
+                      <div className="flex items-start justify-between">
+                        <div>
+                          <div className="text-xs font-semibold text-purple-600 dark:text-purple-400 uppercase tracking-wider">
+                            Date: {gp.date}
+                          </div>
+                          
+                          <div className="flex items-center gap-4 mt-2 font-mono font-bold text-base">
+                            <span className="text-rose-500">OUT: {gp.gateOut}</span>
+                            <span className="text-slate-300">→</span>
+                            <span className="text-emerald-500">IN: {gp.gateIn || 'Pending'}</span>
+                          </div>
+
+                          <div className="mt-3 text-xs text-slate-600 dark:text-slate-300">
+                            <span className="font-bold">Purpose / Reason:</span> {gp.purpose || 'Outing'}
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-1">
+                          <button
+                            onClick={() => {
+                              setEditingItem(gp);
+                              setFormData(gp);
+                              setModalType('gatepass');
+                            }}
+                            className="p-1.5 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-400"
+                          >
+                            <Edit3 size={15} />
+                          </button>
+                          <button
+                            onClick={() => handleDeleteGatePass(gp.id)}
+                            className="p-1.5 rounded-lg hover:bg-rose-500/20 text-rose-500"
+                          >
+                            <Trash2 size={15} />
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+          </div>
+        )}
+
+        {/* =========================================================================
+            TAB 6: DAILY EXPENSES
+            ========================================================================= */}
+        {activeTab === 'expenses' && (
+          <div className="space-y-6">
+            
+            {/* Header & Total Card */}
+            <div className={`p-6 rounded-2xl border flex flex-wrap items-center justify-between gap-4 ${darkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-200'}`}>
+              <div>
+                <h2 className="font-bold text-lg flex items-center gap-2">
+                  <IndianRupee className="text-indigo-500" size={20} />
+                  Student Daily Expenses Tracker
+                </h2>
+                <p className="text-xs text-slate-500 dark:text-slate-400">
+                  Keep track of daily spending on canteen, printouts, and personal hygiene.
+                </p>
+              </div>
+
+              <div className="flex items-center gap-4">
+                <div className="text-right">
+                  <span className="text-xs text-slate-400 block font-semibold uppercase">Total ({dashboardScope})</span>
+                  <span className="text-2xl font-extrabold text-indigo-600 dark:text-indigo-400">
+                    ₹{totalExpensesAmount.toLocaleString('en-IN')}
+                  </span>
+                </div>
+
+                <button
+                  onClick={() => {
+                    setFormData({ date: selectedDate, category: 'Food & Snacks', amount: '', description: '' });
+                    setEditingItem(null);
+                    setModalType('expense');
+                  }}
+                  className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold shadow flex items-center gap-2"
+                >
+                  <Plus size={16} />
+                  <span>Log Expense</span>
+                </button>
+              </div>
+            </div>
+
+            {/* List of Expenses */}
+            <div className="space-y-3">
+              {scopedExpenses.length === 0 ? (
+                <div className={`p-12 text-center rounded-2xl border ${darkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-200'}`}>
+                  <IndianRupee size={36} className="mx-auto text-slate-400 mb-2 opacity-50" />
+                  <p className="font-semibold text-slate-600 dark:text-slate-300">No expenses logged for this scope</p>
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {scopedExpenses.map((exp) => (
+                    <div key={exp.id} className={`p-4 rounded-2xl border shadow-sm flex items-center justify-between gap-3 ${darkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-200'}`}>
+                      <div>
+                        <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 border border-indigo-500/20">
+                          {exp.category}
+                        </span>
+                        <h4 className="font-bold text-base mt-1">{exp.description || exp.category}</h4>
+                        <div className="text-xs text-slate-400 mt-1">Date: {exp.date}</div>
+                      </div>
+
+                      <div className="flex items-center gap-3">
+                        <span className="text-lg font-extrabold text-indigo-600 dark:text-indigo-400">
+                          ₹{parseFloat(exp.amount).toLocaleString('en-IN')}
+                        </span>
+
+                        <div className="flex items-center gap-1">
+                          <button
+                            onClick={() => {
+                              setEditingItem(exp);
+                              setFormData(exp);
+                              setModalType('expense');
+                            }}
+                            className="p-1.5 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-400"
+                          >
+                            <Edit3 size={15} />
+                          </button>
+                          <button
+                            onClick={() => handleDeleteExpense(exp.id, exp.description || exp.category)}
+                            className="p-1.5 rounded-lg hover:bg-rose-500/20 text-rose-500"
+                          >
+                            <Trash2 size={15} />
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+          </div>
+        )}
+
+        {/* =========================================================================
+            TAB 7: OTHER DAILY ACTIVITIES
+            ========================================================================= */}
+        {activeTab === 'activities' && (
+          <div className="space-y-6">
+            
+            {/* Banner */}
+            <div className={`p-5 rounded-2xl border flex flex-wrap items-center justify-between gap-4 ${darkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-200'}`}>
+              <div>
+                <h2 className="font-bold text-lg flex items-center gap-2">
+                  <ListTodo className="text-indigo-500" size={20} />
+                  Daily Activities & Personal Notes ({selectedDate})
+                </h2>
+                <p className="text-xs text-slate-500 dark:text-slate-400">
+                  Manage laundry status, special occasions, personal journal notes, and text-based tasks (No checkboxes).
+                </p>
+              </div>
+            </div>
+
+            {/* Grid of Activity Modules */}
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              
+              {/* Laundry Module */}
+              <div className={`p-5 rounded-2xl border shadow-sm space-y-3 ${darkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-200'}`}>
+                <h3 className="font-bold text-base flex items-center gap-2">
+                  <Shirt size={18} className="text-blue-500" />
+                  Washing Clothes / Laundry Status
+                </h3>
+
+                <div className="grid grid-cols-2 gap-2">
+                  {LAUNDRY_STATUSES.map(st => (
+                    <button
+                      key={st}
+                      onClick={() => updateActivitiesField('laundry', st)}
+                      className={`px-3 py-2 rounded-xl text-xs font-semibold border transition-all ${
+                        currentDayActivities.laundry === st
+                          ? 'bg-blue-600 text-white border-blue-600 shadow'
+                          : (darkMode ? 'bg-slate-800 border-slate-700 text-slate-300' : 'bg-slate-50 border-slate-200 text-slate-700')
+                      }`}
+                    >
+                      {st}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Special Occasions Module */}
+              <div className={`p-5 rounded-2xl border shadow-sm space-y-3 ${darkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-200'}`}>
+                <h3 className="font-bold text-base flex items-center gap-2">
+                  <Sparkles size={18} className="text-amber-500" />
+                  Birthdays & Special Occasions
+                </h3>
+
+                <input
+                  type="text"
+                  placeholder="e.g. Rahul's Birthday, Tech Fest Meeting..."
+                  value={currentDayActivities.specialOccasion || ''}
+                  onChange={(e) => updateActivitiesField('specialOccasion', e.target.value)}
+                  className={`w-full px-3.5 py-2.5 rounded-xl border text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500 ${darkMode ? 'bg-slate-800 border-slate-700 text-white' : 'bg-slate-50 border-slate-300'}`}
+                />
+              </div>
+
+              {/* Text-Based To-Do List (STRICT NO CHECKBOXES) */}
+              <div className={`p-5 rounded-2xl border shadow-sm space-y-4 lg:col-span-2 ${darkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-200'}`}>
+                <h3 className="font-bold text-base flex items-center gap-2">
+                  <CheckSquare size={18} className="text-emerald-500" />
+                  Daily Tasks & To-Dos (Text Badge Status - No Checkboxes)
+                </h3>
+
+                {/* Add task form */}
+                <form onSubmit={handleAddTodo} className="flex items-center gap-2">
+                  <input
+                    type="text"
+                    required
+                    placeholder="Enter task description..."
+                    value={formData.newTodoText || ''}
+                    onChange={(e) => setFormData(prev => ({ ...prev, newTodoText: e.target.value }))}
+                    className={`flex-1 px-3.5 py-2.5 rounded-xl border text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500 ${darkMode ? 'bg-slate-800 border-slate-700 text-white' : 'bg-slate-50 border-slate-300'}`}
+                  />
+                  <button
+                    type="submit"
+                    className="px-4 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold shadow flex items-center gap-1"
+                  >
+                    <Plus size={16} />
+                    <span>Add Task</span>
+                  </button>
+                </form>
+
+                {/* List of Tasks */}
+                <div className="space-y-2 mt-3">
+                  {(currentDayActivities.todos || []).length === 0 ? (
+                    <p className="text-xs text-slate-400 italic text-center py-4">No tasks added for this day.</p>
+                  ) : (
+                    (currentDayActivities.todos || []).map((t) => (
+                      <div key={t.id} className={`p-3 rounded-xl border flex items-center justify-between gap-3 ${darkMode ? 'bg-slate-800/60 border-slate-700' : 'bg-slate-50 border-slate-200'}`}>
+                        <span className="text-xs font-medium">{t.task}</span>
+
+                        <div className="flex items-center gap-2">
+                          {/* Status cycle badge button */}
+                          <button
+                            onClick={() => handleCycleTodoStatus(t.id)}
+                            className={`px-2.5 py-1 rounded-full text-[11px] font-bold border transition-all ${
+                              t.status === 'Completed'
+                                ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20'
+                                : t.status === 'In Progress'
+                                ? 'bg-amber-500/10 text-amber-600 dark:text-amber-400 border-amber-500/20'
+                                : 'bg-slate-500/10 text-slate-600 dark:text-slate-400 border-slate-500/20'
+                            }`}
+                          >
+                            {t.status}
+                          </button>
+
+                          <button
+                            onClick={() => handleDeleteTodo(t.id)}
+                            className="p-1 rounded hover:bg-rose-500/20 text-rose-500"
+                          >
+                            <Trash2 size={14} />
+                          </button>
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </div>
+
+              {/* Personal Journal Notes */}
+              <div className={`p-5 rounded-2xl border shadow-sm space-y-3 lg:col-span-2 ${darkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-200'}`}>
+                <h3 className="font-bold text-base flex items-center gap-2">
+                  <FileText size={18} className="text-indigo-500" />
+                  Personal Reflections & Daily Notes
+                </h3>
+
+                <textarea
+                  rows={4}
+                  placeholder="Write your private thoughts, study notes, or reminder notes for today..."
+                  value={currentDayActivities.notes || ''}
+                  onChange={(e) => updateActivitiesField('notes', e.target.value)}
+                  className={`w-full p-3 rounded-xl border text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500 ${darkMode ? 'bg-slate-800 border-slate-700 text-white' : 'bg-slate-50 border-slate-300'}`}
+                />
+              </div>
+
+            </div>
+
+          </div>
+        )}
+
+        {/* =========================================================================
+            TAB 8: DIARY HISTORY (DATE BROWSER)
+            ========================================================================= */}
+        {activeTab === 'history' && (
+          <div className="space-y-6">
+            
+            {/* Date Selector Header */}
+            <div className={`p-6 rounded-2xl border flex flex-wrap items-center justify-between gap-4 ${darkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-200'}`}>
+              <div>
+                <h2 className="font-bold text-lg flex items-center gap-2">
+                  <History className="text-indigo-500" size={20} />
+                  Historical Diary Browser
+                </h2>
+                <p className="text-xs text-slate-500 dark:text-slate-400">
+                  Select any previous date to inspect, edit, or log past diary entries.
+                </p>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <label className="text-xs font-semibold text-slate-400">Jump to Date:</label>
+                <input
+                  type="date"
+                  value={selectedDate}
+                  onChange={(e) => setSelectedDate(e.target.value)}
+                  className={`px-3 py-2 rounded-xl border text-xs font-bold ${darkMode ? 'bg-slate-800 border-slate-700 text-white' : 'bg-slate-50 border-slate-300 text-slate-800'}`}
+                />
+              </div>
+            </div>
+
+            {/* Complete Day Summary Breakdown */}
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+              
+              {/* Day Classes */}
+              <div className={`p-5 rounded-2xl border shadow-sm space-y-3 ${darkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-200'}`}>
+                <h3 className="font-bold text-sm uppercase tracking-wider text-slate-400 border-b pb-2 border-slate-100 dark:border-slate-800">
+                  Classes on {selectedDate}
+                </h3>
+                {sharedClasses.filter(c => c.date === selectedDate).length === 0 ? (
+                  <p className="text-xs text-slate-400">No classes recorded for this date.</p>
+                ) : (
+                  sharedClasses.filter(c => c.date === selectedDate).map(cls => (
+                    <div key={cls.id} className="text-xs p-2.5 rounded-lg bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700">
+                      <div className="font-bold">{cls.subject === 'Other (specify)' ? cls.customSubject : cls.subject}</div>
+                      <div className="text-slate-400">{cls.startTime} - {cls.endTime}</div>
+                    </div>
+                  ))
+                )}
+              </div>
+
+              {/* Day Expenses */}
+              <div className={`p-5 rounded-2xl border shadow-sm space-y-3 ${darkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-200'}`}>
+                <h3 className="font-bold text-sm uppercase tracking-wider text-slate-400 border-b pb-2 border-slate-100 dark:border-slate-800">
+                  Expenses on {selectedDate}
+                </h3>
+                {expenses.filter(e => e.date === selectedDate).length === 0 ? (
+                  <p className="text-xs text-slate-400">No expenses logged on this date.</p>
+                ) : (
+                  expenses.filter(e => e.date === selectedDate).map(exp => (
+                    <div key={exp.id} className="text-xs p-2.5 rounded-lg bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 flex justify-between">
+                      <span>{exp.description || exp.category}</span>
+                      <span className="font-bold text-indigo-500">₹{exp.amount}</span>
+                    </div>
+                  ))
+                )}
+              </div>
+
+              {/* Day Gate Passes */}
+              <div className={`p-5 rounded-2xl border shadow-sm space-y-3 ${darkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-200'}`}>
+                <h3 className="font-bold text-sm uppercase tracking-wider text-slate-400 border-b pb-2 border-slate-100 dark:border-slate-800">
+                  Gate Passes on {selectedDate}
+                </h3>
+                {gatePasses.filter(g => g.date === selectedDate).length === 0 ? (
+                  <p className="text-xs text-slate-400">No gate passes recorded on this date.</p>
+                ) : (
+                  gatePasses.filter(g => g.date === selectedDate).map(gp => (
+                    <div key={gp.id} className="text-xs p-2.5 rounded-lg bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700">
+                      <div><span className="font-bold">Purpose:</span> {gp.purpose}</div>
+                      <div className="text-slate-400 mt-1">{gp.gateOut} → {gp.gateIn}</div>
+                    </div>
+                  ))
+                )}
+              </div>
+
+            </div>
+
+          </div>
+        )}
+
+      </main>
+
+      {/* =========================================================================
+          MODALS SECTION (CRUD & SHARE)
+          ========================================================================= */}
+      
+      {/* 1. Modal: Add / Edit Class */}
+      {modalType === 'class' && (
+        <div className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className={`max-w-md w-full rounded-2xl p-6 shadow-2xl border ${darkMode ? 'bg-slate-900 border-slate-800 text-white' : 'bg-white border-slate-200 text-slate-900'}`}>
+            <div className="flex items-center justify-between mb-4 border-b pb-3 border-slate-100 dark:border-slate-800">
+              <h3 className="font-bold text-base">
+                {editingItem ? 'Edit Scheduled Class' : 'Add Class to Batch Schedule'}
+              </h3>
+              <button onClick={() => setModalType(null)} className="p-1 rounded hover:bg-slate-200 dark:hover:bg-slate-800">
+                <X size={18} />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveClass} className="space-y-4">
+              <div>
+                <label className="block text-xs font-semibold uppercase text-slate-400 mb-1">Date</label>
+                <input
+                  type="date"
+                  required
+                  value={formData.date || selectedDate}
+                  onChange={(e) => setFormData({ ...formData, date: e.target.value })}
+                  className={`w-full px-3 py-2 rounded-xl border text-xs ${darkMode ? 'bg-slate-800 border-slate-700' : 'bg-slate-50 border-slate-300'}`}
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold uppercase text-slate-400 mb-1">Subject</label>
+                <select
+                  required
+                  value={formData.subject || '-- Select Subject --'}
+                  onChange={(e) => setFormData({ ...formData, subject: e.target.value })}
+                  className={`w-full px-3 py-2 rounded-xl border text-xs ${darkMode ? 'bg-slate-800 border-slate-700' : 'bg-slate-50 border-slate-300'}`}
+                >
+                  {SUBJECT_OPTIONS.map((subj) => (
+                    <option key={subj} value={subj}>{subj}</option>
+                  ))}
+                </select>
+              </div>
+
+              {formData.subject === 'Other (specify)' && (
+                <div>
+                  <label className="block text-xs font-semibold uppercase text-slate-400 mb-1">Custom Subject Name</label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="e.g. Artificial Intelligence"
+                    value={formData.customSubject || ''}
+                    onChange={(e) => setFormData({ ...formData, customSubject: e.target.value })}
+                    className={`w-full px-3 py-2 rounded-xl border text-xs ${darkMode ? 'bg-slate-800 border-slate-700' : 'bg-slate-50 border-slate-300'}`}
+                  />
+                </div>
+              )}
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold uppercase text-slate-400 mb-1">Start Time</label>
+                  <input
+                    type="time"
+                    required
+                    value={formData.startTime || '09:00'}
+                    onChange={(e) => setFormData({ ...formData, startTime: e.target.value })}
+                    className={`w-full px-3 py-2 rounded-xl border text-xs ${darkMode ? 'bg-slate-800 border-slate-700' : 'bg-slate-50 border-slate-300'}`}
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold uppercase text-slate-400 mb-1">End Time</label>
+                  <input
+                    type="time"
+                    required
+                    value={formData.endTime || '10:00'}
+                    onChange={(e) => setFormData({ ...formData, endTime: e.target.value })}
+                    className={`w-full px-3 py-2 rounded-xl border text-xs ${darkMode ? 'bg-slate-800 border-slate-700' : 'bg-slate-50 border-slate-300'}`}
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold uppercase text-slate-400 mb-1">Room / Location (Optional)</label>
+                <input
+                  type="text"
+                  placeholder="e.g. LH-102 or Computer Lab 2"
+                  value={formData.room || ''}
+                  onChange={(e) => setFormData({ ...formData, room: e.target.value })}
+                  className={`w-full px-3 py-2 rounded-xl border text-xs ${darkMode ? 'bg-slate-800 border-slate-700' : 'bg-slate-50 border-slate-300'}`}
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold uppercase text-slate-400 mb-1">Topic Name (Optional)</label>
+                <input
+                  type="text"
+                  placeholder="e.g. Binary Search Trees"
+                  value={formData.topic || ''}
+                  onChange={(e) => setFormData({ ...formData, topic: e.target.value })}
+                  className={`w-full px-3 py-2 rounded-xl border text-xs ${darkMode ? 'bg-slate-800 border-slate-700' : 'bg-slate-50 border-slate-300'}`}
+                />
+              </div>
+
+              <div className="pt-3 flex items-center justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setModalType(null)}
+                  className="px-4 py-2 rounded-xl text-xs font-semibold border border-slate-300 dark:border-slate-700"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold shadow"
+                >
+                  Save Schedule
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* 2. Modal: Add / Edit Assignment Given */}
+      {modalType === 'asgn_given' && (
+        <div className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className={`max-w-md w-full rounded-2xl p-6 shadow-2xl border ${darkMode ? 'bg-slate-900 border-slate-800 text-white' : 'bg-white border-slate-200 text-slate-900'}`}>
+            <div className="flex items-center justify-between mb-4 border-b pb-3 border-slate-100 dark:border-slate-800">
+              <h3 className="font-bold text-base">
+                {editingItem ? 'Edit Assignment Given' : 'Log Assignment Given'}
+              </h3>
+              <button onClick={() => setModalType(null)} className="p-1 rounded hover:bg-slate-200 dark:hover:bg-slate-800">
+                <X size={18} />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveAssignmentGiven} className="space-y-4">
+              <div>
+                <label className="block text-xs font-semibold uppercase text-slate-400 mb-1">Subject</label>
+                <select
+                  required
+                  value={formData.subject || '-- Select Subject --'}
+                  onChange={(e) => setFormData({ ...formData, subject: e.target.value })}
+                  className={`w-full px-3 py-2 rounded-xl border text-xs ${darkMode ? 'bg-slate-800 border-slate-700' : 'bg-slate-50 border-slate-300'}`}
+                >
+                  {SUBJECT_OPTIONS.map((subj) => (
+                    <option key={subj} value={subj}>{subj}</option>
+                  ))}
+                </select>
+              </div>
+
+              {formData.subject === 'Other (specify)' && (
+                <div>
+                  <label className="block text-xs font-semibold uppercase text-slate-400 mb-1">Custom Subject</label>
+                  <input
+                    type="text"
+                    required
+                    value={formData.customSubject || ''}
+                    onChange={(e) => setFormData({ ...formData, customSubject: e.target.value })}
+                    className={`w-full px-3 py-2 rounded-xl border text-xs ${darkMode ? 'bg-slate-800 border-slate-700' : 'bg-slate-50 border-slate-300'}`}
+                  />
+                </div>
+              )}
+
+              <div>
+                <label className="block text-xs font-semibold uppercase text-slate-400 mb-1">Topic / Title (Optional)</label>
+                <input
+                  type="text"
+                  placeholder="e.g. Assignment 3: Pointers"
+                  value={formData.topic || ''}
+                  onChange={(e) => setFormData({ ...formData, topic: e.target.value })}
+                  className={`w-full px-3 py-2 rounded-xl border text-xs ${darkMode ? 'bg-slate-800 border-slate-700' : 'bg-slate-50 border-slate-300'}`}
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold uppercase text-slate-400 mb-1">Date Given</label>
+                  <input
+                    type="date"
+                    required
+                    value={formData.dateGiven || selectedDate}
+                    onChange={(e) => setFormData({ ...formData, dateGiven: e.target.value })}
+                    className={`w-full px-3 py-2 rounded-xl border text-xs ${darkMode ? 'bg-slate-800 border-slate-700' : 'bg-slate-50 border-slate-300'}`}
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold uppercase text-slate-400 mb-1">Due Date</label>
+                  <input
+                    type="date"
+                    required
+                    value={formData.dueDate || selectedDate}
+                    onChange={(e) => setFormData({ ...formData, dueDate: e.target.value })}
+                    className={`w-full px-3 py-2 rounded-xl border text-xs ${darkMode ? 'bg-slate-800 border-slate-700' : 'bg-slate-50 border-slate-300'}`}
+                  />
+                </div>
+              </div>
+
+              <div className="pt-3 flex items-center justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setModalType(null)}
+                  className="px-4 py-2 rounded-xl text-xs font-semibold border border-slate-300 dark:border-slate-700"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="px-4 py-2 rounded-xl bg-amber-600 hover:bg-amber-700 text-white text-xs font-semibold shadow"
+                >
+                  Save Record
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* 3. Modal: Add / Edit Assignment Submission */}
+      {modalType === 'asgn_sub' && (
+        <div className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className={`max-w-md w-full rounded-2xl p-6 shadow-2xl border ${darkMode ? 'bg-slate-900 border-slate-800 text-white' : 'bg-white border-slate-200 text-slate-900'}`}>
+            <div className="flex items-center justify-between mb-4 border-b pb-3 border-slate-100 dark:border-slate-800">
+              <h3 className="font-bold text-base">
+                {editingItem ? 'Edit Submission Record' : 'Log Assignment Submission'}
+              </h3>
+              <button onClick={() => setModalType(null)} className="p-1 rounded hover:bg-slate-200 dark:hover:bg-slate-800">
+                <X size={18} />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveAssignmentSubmitted} className="space-y-4">
+              <div>
+                <label className="block text-xs font-semibold uppercase text-slate-400 mb-1">Subject</label>
+                <select
+                  required
+                  value={formData.subject || '-- Select Subject --'}
+                  onChange={(e) => setFormData({ ...formData, subject: e.target.value })}
+                  className={`w-full px-3 py-2 rounded-xl border text-xs ${darkMode ? 'bg-slate-800 border-slate-700' : 'bg-slate-50 border-slate-300'}`}
+                >
+                  {SUBJECT_OPTIONS.map((subj) => (
+                    <option key={subj} value={subj}>{subj}</option>
+                  ))}
+                </select>
+              </div>
+
+              {formData.subject === 'Other (specify)' && (
+                <div>
+                  <label className="block text-xs font-semibold uppercase text-slate-400 mb-1">Custom Subject</label>
+                  <input
+                    type="text"
+                    required
+                    value={formData.customSubject || ''}
+                    onChange={(e) => setFormData({ ...formData, customSubject: e.target.value })}
+                    className={`w-full px-3 py-2 rounded-xl border text-xs ${darkMode ? 'bg-slate-800 border-slate-700' : 'bg-slate-50 border-slate-300'}`}
+                  />
+                </div>
+              )}
+
+              <div>
+                <label className="block text-xs font-semibold uppercase text-slate-400 mb-1">Topic / Title (Optional)</label>
+                <input
+                  type="text"
+                  placeholder="e.g. Lab Report 1"
+                  value={formData.topic || ''}
+                  onChange={(e) => setFormData({ ...formData, topic: e.target.value })}
+                  className={`w-full px-3 py-2 rounded-xl border text-xs ${darkMode ? 'bg-slate-800 border-slate-700' : 'bg-slate-50 border-slate-300'}`}
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold uppercase text-slate-400 mb-1">Submission Date</label>
+                <input
+                  type="date"
+                  required
+                  value={formData.submissionDate || selectedDate}
+                  onChange={(e) => setFormData({ ...formData, submissionDate: e.target.value })}
+                  className={`w-full px-3 py-2 rounded-xl border text-xs ${darkMode ? 'bg-slate-800 border-slate-700' : 'bg-slate-50 border-slate-300'}`}
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold uppercase text-slate-400 mb-1">Remarks (Optional)</label>
+                <input
+                  type="text"
+                  placeholder="e.g. Submitted on Google Classroom / Handed in person"
+                  value={formData.remarks || ''}
+                  onChange={(e) => setFormData({ ...formData, remarks: e.target.value })}
+                  className={`w-full px-3 py-2 rounded-xl border text-xs ${darkMode ? 'bg-slate-800 border-slate-700' : 'bg-slate-50 border-slate-300'}`}
+                />
+              </div>
+
+              <div className="pt-3 flex items-center justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setModalType(null)}
+                  className="px-4 py-2 rounded-xl text-xs font-semibold border border-slate-300 dark:border-slate-700"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold shadow"
+                >
+                  Save Submission
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* 4. Modal: Add / Edit Gate Pass */}
+      {modalType === 'gatepass' && (
+        <div className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className={`max-w-md w-full rounded-2xl p-6 shadow-2xl border ${darkMode ? 'bg-slate-900 border-slate-800 text-white' : 'bg-white border-slate-200 text-slate-900'}`}>
+            <div className="flex items-center justify-between mb-4 border-b pb-3 border-slate-100 dark:border-slate-800">
+              <h3 className="font-bold text-base">
+                {editingItem ? 'Edit Gate Pass' : 'Add Gate Outing Pass'}
+              </h3>
+              <button onClick={() => setModalType(null)} className="p-1 rounded hover:bg-slate-200 dark:hover:bg-slate-800">
+                <X size={18} />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveGatePass} className="space-y-4">
+              <div>
+                <label className="block text-xs font-semibold uppercase text-slate-400 mb-1">Date</label>
+                <input
+                  type="date"
+                  required
+                  value={formData.date || selectedDate}
+                  onChange={(e) => setFormData({ ...formData, date: e.target.value })}
+                  className={`w-full px-3 py-2 rounded-xl border text-xs ${darkMode ? 'bg-slate-800 border-slate-700' : 'bg-slate-50 border-slate-300'}`}
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold uppercase text-slate-400 mb-1">Gate Out Time</label>
+                  <input
+                    type="time"
+                    required
+                    value={formData.gateOut || '17:00'}
+                    onChange={(e) => setFormData({ ...formData, gateOut: e.target.value })}
+                    className={`w-full px-3 py-2 rounded-xl border text-xs ${darkMode ? 'bg-slate-800 border-slate-700' : 'bg-slate-50 border-slate-300'}`}
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold uppercase text-slate-400 mb-1">Gate In Time</label>
+                  <input
+                    type="time"
+                    value={formData.gateIn || '19:30'}
+                    onChange={(e) => setFormData({ ...formData, gateIn: e.target.value })}
+                    className={`w-full px-3 py-2 rounded-xl border text-xs ${darkMode ? 'bg-slate-800 border-slate-700' : 'bg-slate-50 border-slate-300'}`}
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold uppercase text-slate-400 mb-1">Purpose / Reason</label>
+                <input
+                  type="text"
+                  required
+                  placeholder="e.g. Market snacks, Station visit..."
+                  value={formData.purpose || ''}
+                  onChange={(e) => setFormData({ ...formData, purpose: e.target.value })}
+                  className={`w-full px-3 py-2 rounded-xl border text-xs ${darkMode ? 'bg-slate-800 border-slate-700' : 'bg-slate-50 border-slate-300'}`}
+                />
+              </div>
+
+              <div className="pt-3 flex items-center justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setModalType(null)}
+                  className="px-4 py-2 rounded-xl text-xs font-semibold border border-slate-300 dark:border-slate-700"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="px-4 py-2 rounded-xl bg-purple-600 hover:bg-purple-700 text-white text-xs font-semibold shadow"
+                >
+                  Save Pass
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* 5. Modal: Add / Edit Expense */}
+      {modalType === 'expense' && (
+        <div className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className={`max-w-md w-full rounded-2xl p-6 shadow-2xl border ${darkMode ? 'bg-slate-900 border-slate-800 text-white' : 'bg-white border-slate-200 text-slate-900'}`}>
+            <div className="flex items-center justify-between mb-4 border-b pb-3 border-slate-100 dark:border-slate-800">
+              <h3 className="font-bold text-base">
+                {editingItem ? 'Edit Expense Record' : 'Log Daily Expense'}
+              </h3>
+              <button onClick={() => setModalType(null)} className="p-1 rounded hover:bg-slate-200 dark:hover:bg-slate-800">
+                <X size={18} />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveExpense} className="space-y-4">
+              <div>
+                <label className="block text-xs font-semibold uppercase text-slate-400 mb-1">Date</label>
+                <input
+                  type="date"
+                  required
+                  value={formData.date || selectedDate}
+                  onChange={(e) => setFormData({ ...formData, date: e.target.value })}
+                  className={`w-full px-3 py-2 rounded-xl border text-xs ${darkMode ? 'bg-slate-800 border-slate-700' : 'bg-slate-50 border-slate-300'}`}
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold uppercase text-slate-400 mb-1">Category</label>
+                <select
+                  value={formData.category || 'Food & Snacks'}
+                  onChange={(e) => setFormData({ ...formData, category: e.target.value })}
+                  className={`w-full px-3 py-2 rounded-xl border text-xs ${darkMode ? 'bg-slate-800 border-slate-700' : 'bg-slate-50 border-slate-300'}`}
+                >
+                  {EXPENSE_CATEGORIES.map(cat => (
+                    <option key={cat} value={cat}>{cat}</option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold uppercase text-slate-400 mb-1">Amount (in ₹)</label>
+                <input
+                  type="number"
+                  step="any"
+                  required
+                  placeholder="e.g. 150"
+                  value={formData.amount || ''}
+                  onChange={(e) => setFormData({ ...formData, amount: e.target.value })}
+                  className={`w-full px-3 py-2 rounded-xl border text-xs ${darkMode ? 'bg-slate-800 border-slate-700' : 'bg-slate-50 border-slate-300'}`}
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold uppercase text-slate-400 mb-1">Description / Notes</label>
+                <input
+                  type="text"
+                  placeholder="e.g. Printout for OS lab"
+                  value={formData.description || ''}
+                  onChange={(e) => setFormData({ ...formData, description: e.target.value })}
+                  className={`w-full px-3 py-2 rounded-xl border text-xs ${darkMode ? 'bg-slate-800 border-slate-700' : 'bg-slate-50 border-slate-300'}`}
+                />
+              </div>
+
+              <div className="pt-3 flex items-center justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setModalType(null)}
+                  className="px-4 py-2 rounded-xl text-xs font-semibold border border-slate-300 dark:border-slate-700"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold shadow"
+                >
+                  Save Expense
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* 6. Delete Confirmation Modal */}
+      {deleteConfirmation && (
+        <div className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className={`max-w-sm w-full rounded-2xl p-6 shadow-2xl border ${darkMode ? 'bg-slate-900 border-slate-800 text-white' : 'bg-white border-slate-200 text-slate-900'}`}>
+            <div className="text-center space-y-3">
+              <div className="w-12 h-12 rounded-full bg-rose-500/10 text-rose-500 mx-auto flex items-center justify-center">
+                <AlertTriangle size={24} />
+              </div>
+              <h3 className="font-bold text-base">Confirm Deletion</h3>
+              <p className="text-xs text-slate-400">{deleteConfirmation.title}</p>
+              
+              <div className="pt-3 flex items-center justify-center gap-3">
+                <button
+                  onClick={() => setDeleteConfirmation(null)}
+                  className="px-4 py-2 rounded-xl text-xs font-semibold border border-slate-300 dark:border-slate-700"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={() => {
+                    deleteConfirmation.action();
+                    setDeleteConfirmation(null);
+                  }}
+                  className="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold shadow"
+                >
+                  Confirm Delete
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 7. Share Portal Modal */}
+      {isShareModalOpen && (
+        <div className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className={`max-w-md w-full rounded-2xl p-6 shadow-2xl border ${darkMode ? 'bg-slate-900 border-slate-800 text-white' : 'bg-white border-slate-200 text-slate-900'}`}>
+            <div className="flex items-center justify-between mb-4 border-b pb-3 border-slate-100 dark:border-slate-800">
+              <h3 className="font-bold text-base flex items-center gap-2">
+                <Share2 size={18} className="text-indigo-500" />
+                Share CUAP Daily Diary Portal
+              </h3>
+              <button onClick={() => setIsShareModalOpen(false)} className="p-1 rounded hover:bg-slate-200 dark:hover:bg-slate-800">
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="space-y-4">
+              <p className="text-xs text-slate-500 dark:text-slate-400">
+                Share this link with your B.Tech CSE classmates at Central University of Andhra Pradesh to manage class schedules together!
+              </p>
+
+              {/* Direct Link Input */}
+              <div className="flex items-center gap-2">
+                <input
+                  type="text"
+                  readOnly
+                  value={window.location.href}
+                  className={`flex-1 px-3 py-2 rounded-xl border text-xs font-mono select-all ${darkMode ? 'bg-slate-800 border-slate-700 text-slate-300' : 'bg-slate-50 border-slate-300'}`}
+                />
+                <button
+                  onClick={() => {
+                    navigator.clipboard.writeText(window.location.href);
+                    showToast('Link copied to clipboard!');
+                  }}
+                  className="px-3.5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold shadow flex items-center gap-1.5 shrink-0"
+                >
+                  <Copy size={15} />
+                  <span>Copy</span>
+                </button>
+              </div>
+
+              {/* WhatsApp Share Button */}
+              <a
+                href={`https://api.whatsapp.com/send?text=${encodeURIComponent(`Hey! Check out the CUAP Daily Diary & Class Tracker for CSE batch: ${window.location.href}`)}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="w-full py-2.5 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow flex items-center justify-center gap-2"
+              >
+                <Send size={16} />
+                <span>Share via WhatsApp</span>
+              </a>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* --- Toast Notification Banner --- */}
+      {toastMessage && (
+        <div className="fixed bottom-5 right-5 z-50 px-4 py-3 rounded-2xl bg-slate-900 text-white dark:bg-white dark:text-slate-900 shadow-2xl border border-slate-700/40 text-xs font-semibold flex items-center gap-2 animate-bounce">
+          <Bell size={16} className="text-indigo-400 dark:text-indigo-600" />
+          <span>{toastMessage}</span>
+        </div>
+      )}
+
+    </div>
+  );
+}
